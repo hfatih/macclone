@@ -67,3 +67,10 @@ Windows x64 çapraz derleme ve Clippy geçti. Masaüstü için `npm run lint` ve
 - Linux'ta 96 deterministik GPT/MBR mutasyonu ile CLI incelemesi kilitlenme veya Rust paniği üretmedi.
 - Chromium'da sentetik Tauri çağrılarıyla aynı numaraya takılan yeni disk, geç gelen bölüm sonucu ve tamamlanmış işi eski bir ilerleme yanıtıyla geri alma senaryoları sınandı.
 - Windows fiziksel klon adayı, işletim sistemi dosya önbelleğini atlayan sektör hizalı G/Ç kullanır. Aday CLI ve masaüstü Windows x64 için çapraz derlendi. Ham cihazlarda erişim modunun ve sürücü davranışının Windows çalışma zamanı doğrulaması bekliyor.
+
+## Devam ve aygıt kimliği hata düzeltmeleri
+
+- 56 Rust testi geçti. Ek regresyonlar geçerli başlangıcı olan yarım iş tanımını, işlem sırasında büyüyen RAW kaynağı, aygıt numarası değiştikten sonra kimlik ve kayıtlı blok doğrulamasını, tarama sırasında beliren yinelenen seri numarasını ve sanal/eksik/çakışan günlük depolamasını kapsıyor.
+- Linux üzerinde 512 bayt bloklarla 4 MiB RAW kopyalayan ayrı CLI süreci ortada zorla sonlandırıldı. Tamamlanma raporu oluşmadığı doğrulandı. Aynı işte `--resume` çalıştırıldığında hedefin 4.194.304 baytı kaynakla eşleşti ve SHA-256 bağımsız olarak doğrulandı.
+- 512 ve 4096 bayt sektörlü uçtan uca CLI senaryoları geçti. Eşit boyutlu imajlar `partition-manager` çıktısıyla bayt bayt aynıydı. Büyük GPT hedefi, yedek GPT CRC'si ve geçersiz hedefleri reddetme kontrolleri de geçti.
+- Windows x64 CLI ve masaüstü çapraz derlendi. Ham okuma akışı çevrimdışı disk durumunu işlem sırasında ve son kaynak denetiminde sorgular. Gerçek Windows üzerinde USB çıkarıp takma, HDD/SSD aktarımı, çevrimdışı aygıt sürücüsü davranışı ve macOS açılışı çalışma zamanı doğrulaması bekliyor.

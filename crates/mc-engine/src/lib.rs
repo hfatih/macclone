@@ -51,6 +51,29 @@ struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relocated_gpt_target_bytes: Option<u64>,
 }
+impl Manifest {
+    fn matches_resume(expected: &Self, mut saved: Self) -> bool {
+        if let (
+            Input::Disk {
+                number: current,
+                id,
+            },
+            Input::Disk {
+                number,
+                id: recorded,
+            },
+        ) = (&expected.input, &mut saved.input)
+            && !id.is_empty()
+            && id == recorded
+        {
+            // The disk number is a current Windows alias. Endpoint identities, geometry and
+            // options are checked independently, and all committed data is revalidated below.
+            *number = *current;
+        }
+        saved == *expected
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Frame<T> {
     record: T,
@@ -193,13 +216,17 @@ fn load_report(path: &Path) -> io::Result<Option<Report>> {
 }
 
 fn bounded_json<T: serde::de::DeserializeOwned>(file: &File) -> io::Result<T> {
+    serde_json::from_slice(&read_job_json(file)?).map_err(io::Error::other)
+}
+
+fn read_job_json(file: &File) -> io::Result<Vec<u8>> {
     const MAX_DOCUMENT: u64 = 1024 * 1024;
     let mut bytes = Vec::new();
     file.take(MAX_DOCUMENT + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_DOCUMENT {
         return Err(invalid("Job JSON exceeds size limit"));
     }
-    serde_json::from_slice(&bytes).map_err(io::Error::other)
+    Ok(bytes)
 }
 
 fn distinct(files: &[&File]) -> io::Result<()> {
@@ -295,7 +322,12 @@ fn write_image(
     options.validate(source.original.stamp.sector)?;
     checkpoint(cancel)?;
     if !resume {
-        fs::create_dir(dir)?
+        fs::create_dir(dir)?;
+        let parent = dir
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        sync_dir(parent)?;
     }
     if !fs::symlink_metadata(dir)?.is_dir() {
         return Err(invalid("Expected a local job directory"));
@@ -450,21 +482,46 @@ fn transfer<T: Target>(
         map_id: file_id(&map)?.0,
         relocated_gpt_target_bytes: relocated_bytes,
     };
+    let destination_length = target.length()?;
     if resume {
-        if bounded_json::<Manifest>(&manifest)? != actual {
-            return Err(invalid("Job identity, geometry or options changed"));
+        let bytes = read_job_json(&manifest)?;
+        match serde_json::from_slice::<Manifest>(&bytes) {
+            Ok(saved) => {
+                if !Manifest::matches_resume(&actual, saved) {
+                    return Err(invalid("Job identity, geometry or options changed"));
+                }
+            }
+            Err(error) => {
+                // Only a new, still empty RAW image can recover interrupted metadata setup.
+                // The surviving bytes must be an exact prefix of this job's metadata.
+                let current = serde_json::to_vec(&actual)?;
+                if T::REPORT_DEVICE_IDENTITY
+                    || previous_report.is_some()
+                    || destination_length != 0
+                    || map.metadata()?.len() != 0
+                    || bytes.len() >= current.len()
+                    || !current.starts_with(&bytes)
+                {
+                    return Err(io::Error::other(error));
+                }
+                manifest.seek(SeekFrom::Start(bytes.len() as u64))?;
+                manifest.write_all(&current[bytes.len()..])?;
+                manifest.sync_all()?;
+                sync_dir(dir)?;
+            }
         }
     } else {
         serde_json::to_writer(&mut manifest, &actual)?;
         manifest.sync_all()?;
-        sync_dir(dir)?
+        sync_dir(dir)?;
     }
     let total = relocated_bytes.unwrap_or(source.stamp.bytes);
     let sector = source.stamp.sector;
     let mut buffer = vec![0; options.block as usize];
-    if target.length()? > total {
+    if destination_length > total {
         return Err(invalid("Target is longer than source"));
     }
+    check_source(input, &mut source)?;
     let mut view: Box<dyn mc_device::Reader + '_> = match gpt.as_ref() {
         Some(gpt) => Box::new(gpt.reader(&mut *source.reader)),
         None => Box::new(&mut *source.reader),
@@ -556,9 +613,12 @@ fn transfer<T: Target>(
     target.seek(SeekFrom::Start(offset))?;
     while offset < total {
         checkpoint(cancel)?;
+        check_image_metadata(source.backing_file.as_ref(), &source.stamp)?;
         let n = (total - offset).min(options.block as u64) as usize;
         let buf = &mut buffer[..n];
         let holes = acquire(&mut *view, offset, buf, sector, options.recovery, cancel)?;
+        check_image_metadata(source.backing_file.as_ref(), &source.stamp)?;
+        checkpoint(cancel)?;
         let rec = Record {
             start: offset,
             end: offset + n as u64,
@@ -591,7 +651,7 @@ fn transfer<T: Target>(
     }
     target.check_snapshot(total, target_snapshot)?;
     drop(view);
-    check_source_file(input, &source)?;
+    check_source(input, &mut source)?;
     checkpoint(cancel)?;
     let report = Report {
         outcome: if missing == 0 { "verified" } else { "partial" }.into(),
@@ -671,8 +731,24 @@ fn hash_reader<R: Read + Seek + ?Sized>(
     }
     Ok(format!("{:x}", hash.finalize()))
 }
+fn check_image_metadata(file: Option<&File>, stamp: &Stamp) -> io::Result<()> {
+    if let Some(file) = file {
+        let metadata = file.metadata()?;
+        let modified = metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_nanos()
+            .to_string();
+        if metadata.len() != stamp.bytes || Some(modified) != stamp.modified_ns {
+            return Err(invalid("Source file changed during the operation"));
+        }
+    }
+    Ok(())
+}
+
 // A matching prefix digest alone cannot detect a renamed, replaced or growing file.
-fn check_source_file(input: &Input, source: &Source) -> io::Result<()> {
+fn check_source(input: &Input, source: &mut Source) -> io::Result<()> {
     if let (Input::Image { path, .. }, Some(opened)) = (input, &source.backing_file) {
         let named = mc_device::open_image_file(path).map_err(|error| {
             io::Error::new(
@@ -680,19 +756,13 @@ fn check_source_file(input: &Input, source: &Source) -> io::Result<()> {
                 format!("Source file changed during the operation: {error}"),
             )
         })?;
-        let metadata = opened.metadata()?;
-        let modified = metadata
-            .modified()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(io::Error::other)?
-            .as_nanos()
-            .to_string();
-        if file_id(opened)?.0 != file_id(&named)?.0
-            || metadata.len() != source.stamp.bytes
-            || Some(modified) != source.stamp.modified_ns
-        {
+        if file_id(opened)?.0 != file_id(&named)?.0 {
             return Err(invalid("Source file changed during the operation"));
         }
+        check_image_metadata(Some(opened), &source.stamp)?;
+    } else if matches!(input, Input::Disk { .. }) {
+        // The Windows reader checks the live disk state on this position query.
+        source.reader.stream_position()?;
     }
     Ok(())
 }
@@ -723,7 +793,7 @@ pub fn verify_with_total(
         cancel,
         |bytes| progress(bytes, total),
     )?;
-    check_source_file(input, &src)?;
+    check_source(input, &mut src)?;
     checkpoint(cancel)?;
     if !hash.eq_ignore_ascii_case(expected) {
         return Err(invalid("SHA-256 mismatch"));
@@ -791,6 +861,131 @@ mod tests {
         assert!(verify(&i, &"0".repeat(64), &c, |_| {}).is_err());
         assert_eq!(j.run(true, &c, |_| {}).unwrap(), r)
     }
+    #[test]
+    fn interrupted_raw_metadata_setup_can_resume_an_empty_job() {
+        let j = TestJob::new();
+        fs::create_dir(&j.out).unwrap();
+        let pending = j.out.join("job.json");
+        let target = j.out.join("image.raw");
+        fs::write(&pending, b"{\"version\":1,").unwrap();
+        fs::write(j.out.join("map.jsonl"), []).unwrap();
+        fs::write(&target, [0; 512]).unwrap();
+        let cancel = AtomicBool::new(false);
+        assert!(j.run(true, &cancel, |_| {}).is_err());
+        assert_eq!(fs::metadata(&target).unwrap().len(), 512);
+        fs::write(&target, []).unwrap();
+        fs::write(&pending, b"{\"wrong\":").unwrap();
+        assert!(j.run(true, &cancel, |_| {}).is_err());
+        fs::write(&pending, b"{\"version\":1,").unwrap();
+        let report = j.run(true, &cancel, |_| {}).unwrap();
+        assert_eq!(report.outcome, "verified");
+        assert_eq!(fs::metadata(target).unwrap().len(), 8192);
+    }
+
+    #[test]
+    fn disk_renumbering_revalidates_checkpoints_before_resume() {
+        let j = TestJob::new();
+        let input = |number, id: &str| Input::Disk {
+            number,
+            id: id.to_owned(),
+        };
+        let options = Options {
+            block: 2048,
+            recovery: false,
+        };
+        let source = |byte| Source {
+            reader: Box::new(Cursor::new(vec![byte; 8192])),
+            stamp: Stamp {
+                identity: "stored disk identity".into(),
+                bytes: 8192,
+                sector: 512,
+                modified_ns: None,
+            },
+            backing_file: None,
+        };
+        let cancel = AtomicBool::new(false);
+        let failed = run_with(
+            &input(3, "expected-id"),
+            source(7),
+            &j.out,
+            options,
+            false,
+            &cancel,
+            |p| {
+                if p.bytes == 2048 {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+        );
+        assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        cancel.store(false, Ordering::Relaxed);
+        assert!(
+            run_with(
+                &input(8, "other-id"),
+                source(7),
+                &j.out,
+                options,
+                true,
+                &cancel,
+                |_| {}
+            )
+            .is_err()
+        );
+        let wrong_bytes = run_with(
+            &input(8, "expected-id"),
+            source(0),
+            &j.out,
+            options,
+            true,
+            &cancel,
+            |_| {},
+        );
+        assert!(
+            wrong_bytes
+                .unwrap_err()
+                .to_string()
+                .contains("Checkpoint source")
+        );
+        let report = run_with(
+            &input(8, "expected-id"),
+            source(7),
+            &j.out,
+            options,
+            true,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(report.sha256, digest(&[7; 8192]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn modified_raw_source_stops_before_the_next_block() {
+        let j = TestJob::new();
+        let Input::Image { path, .. } = &j.src else {
+            unreachable!()
+        };
+        let result = j.run(false, &AtomicBool::new(false), |progress| {
+            if progress.phase == "copy" && progress.bytes == 2048 {
+                OpenOptions::new()
+                    .append(true)
+                    .open(path)
+                    .unwrap()
+                    .write_all(&[8; 512])
+                    .unwrap();
+            }
+        });
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Source file changed")
+        );
+        assert_eq!(fs::metadata(j.out.join("image.raw")).unwrap().len(), 2048);
+        assert!(!j.out.join("report.json").exists());
+    }
+
     #[test]
     fn report_created_while_verifying_is_preserved() {
         let j = TestJob::new();

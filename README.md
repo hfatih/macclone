@@ -32,7 +32,7 @@ SHA-256, hedefin yeniden okunan içeriğini doğrular. Eşit kapasitede karşıl
 
 ## Fiziksel HDD ve SSD klonu
 
-`windows-physical-clone` Cargo özelliği Windows CLI'ye etkileşimli `clone SOURCE_NUMBER TARGET_NUMBER JOB_DIR [--resume] [--relocate-gpt]` komutunu ekler. Varsayılan uygulama sürümü imaj ve salt okunur plan sunar. Eşit mantıksal sektör boyu her iki yönde de gerekir. Büyük hedef için ayrıca `--relocate-gpt` kullanılır. Bu işlem hedefin ek alanını sıfırlar ve dosya sistemini büyütmez. Kaynak ve hedef çevrimdışı ve bağlı Windows volume'larından ayrı olmalıdır. Günlük dizini üçüncü, erişilebilir bir yerel disk üzerinde olmalıdır. Aynı iş dizininden devam etmek için kaynağı, hedefi ve ayarları koruyun.
+`windows-physical-clone` Cargo özelliği Windows CLI'ye etkileşimli `clone SOURCE_NUMBER TARGET_NUMBER JOB_DIR [--resume] [--relocate-gpt]` komutunu ekler. Varsayılan uygulama sürümü imaj ve salt okunur plan sunar. Eşit mantıksal sektör boyu her iki yönde de gerekir. Büyük hedef için ayrıca `--relocate-gpt` kullanılır. Bu işlem hedefin ek alanını sıfırlar ve dosya sistemini büyütmez. Kaynak ve hedef çevrimdışı ve bağlı Windows volume'larından ayrı olmalıdır. Günlük dizininin depolama alanı, kaynak ve hedef dışındaki doğrudan fiziksel disklere bağlanabilmelidir. Sanal veya belirsiz depolama hata olarak gösterilir. Aynı iş dizininden devam etmek için kaynağı, hedefi ve ayarları koruyun. Windows yeniden bağlanan diske yeni numara verirse güncel numarayı girin. Uygulama sabit kimlikleri ve kopyalanmış blokları yeniden denetler.
 
 Windows kabulü için önce izole, yükseltilmiş Windows x64 VM içinde yalnızca testin oluşturduğu VHDX üzerinde aktarım katmanını doğrulayın.
 
@@ -105,7 +105,7 @@ python scripts/smoke.py target/debug/macclone.exe
 
 - **Access denied / sharing violation** · Yükseltilmiş CLI ve kaynak diskin durumunu denetleyin. Yazma paylaşımı veya salt okunur koruması gevşetilmez.
 - **Kimlik/seri veya checkpoint uyuşmuyor** · Disk numarası tekrar kullanılmış, dosya değiştirilmiş veya depolama köprüsü yeterli kimlik sunamamış olabilir. Eski haritayı elle düzenlemek önceki kanıtı geçersiz kılar.
-- **Disk doldu veya bağlantı kesildi** · İş başarısız görünür. Yeterli alan sağlandıktan ve aynı kaynak bağlandıktan sonra aynı işlemi `--resume` ile başlatın. Başlangıçta iş tanımı bile kalıcılaşmamışsa yeni, boş bir klasör seçin.
+- **Disk doldu veya bağlantı kesildi** · İş başarısız görünür. Yeterli alan sağlandıktan ve aynı kaynak bağlandıktan sonra aynı işlemi `--resume` ile başlatın. Boş RAW imaj, boş blok haritası ve tanımın geçerli başlangıcı kurtarılabiliyorsa iş aynı klasörde devam eder. Dosyalar henüz oluşmadıysa yeni bir iş klasörü seçin.
 - **Bozuk kaynak** · İlk okuma medyayı zorlayabilir. Kurtarma akışı kesin medya hatalarını kaydeder. Burada ddrescue'nun çok geçişli trim/scrape zamanlayıcısı uygulanmadı.
 - **UI kapanırsa** · Yerel süreç sonlanabilir. Yeniden açıp aynı iş klasörüyle devam edin. Arka planda kalıcı Windows servisi kurulmaz.
 - **GPT doğru, Mac açılmıyor** · FileVault anahtarları, SSV ve ilgili Mac'in başlangıç güvenliği ayrı değerlendirilir. Bu sürüm boot testi yapmaz.

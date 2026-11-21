@@ -189,6 +189,7 @@ pub(super) fn open_disk(number: u32, id: &str, consistent: bool) -> io::Result<S
     let len = u64::from_le_bytes(query(&file, IOCTL_DISK_GET_LENGTH_INFO)?);
     if consistent {
         bind_handle(&file, &d, false)?;
+        raw_disk_attributes(&file, false)?;
     }
     let dev = query::<12>(&file, IOCTL_STORAGE_GET_DEVICE_NUMBER)?;
     if u32::from_le_bytes(dev[4..8].try_into().unwrap()) != number
@@ -214,8 +215,7 @@ pub(super) fn open_disk(number: u32, id: &str, consistent: bool) -> io::Result<S
         reader: Box::new(SectorReader {
             file,
             pos: 0,
-            #[cfg(feature = "windows-physical-clone")]
-            require_offline: false,
+            require_offline: consistent,
             len,
             sector: d.logical as usize,
             buf: Aligned([0u8; 65536]),
@@ -232,7 +232,6 @@ struct SectorReader {
     pos: u64,
     len: u64,
     sector: usize,
-    #[cfg(feature = "windows-physical-clone")]
     require_offline: bool,
 }
 impl Read for SectorReader {
@@ -241,7 +240,6 @@ impl Read for SectorReader {
         if max == 0 {
             return Ok(0);
         }
-        #[cfg(feature = "windows-physical-clone")]
         if self.require_offline {
             raw_disk_attributes(&self.file, false)?;
         }
@@ -251,7 +249,6 @@ impl Read for SectorReader {
         let skip = (self.pos - base) as usize;
         let n = max.min(self.buf.0.len() - skip);
         let read_len = (n + skip).div_ceil(self.sector) * self.sector;
-        #[cfg(feature = "windows-physical-clone")]
         if self.require_offline {
             if self.file.read(&mut self.buf.0[..read_len])? != read_len {
                 return Err(io::Error::new(
@@ -262,8 +259,6 @@ impl Read for SectorReader {
         } else {
             self.file.read_exact(&mut self.buf.0[..read_len])?;
         }
-        #[cfg(not(feature = "windows-physical-clone"))]
-        self.file.read_exact(&mut self.buf.0[..read_len])?;
         b[..n].copy_from_slice(&self.buf.0[skip..skip + n]);
         self.pos += n as u64;
         Ok(n)
@@ -271,6 +266,9 @@ impl Read for SectorReader {
 }
 impl Seek for SectorReader {
     fn seek(&mut self, p: SeekFrom) -> io::Result<u64> {
+        if matches!(p, SeekFrom::Current(0)) && self.require_offline {
+            raw_disk_attributes(&self.file, false)?;
+        }
         let v = match p {
             SeekFrom::Start(n) => n as i128,
             SeekFrom::Current(n) => self.pos as i128 + n as i128,
@@ -284,14 +282,18 @@ impl Seek for SectorReader {
     }
 }
 
-#[cfg(feature = "windows-physical-clone")]
 fn raw_disk_attributes(file: &File, writable: bool) -> io::Result<()> {
     use windows_sys::Win32::System::Ioctl::{
         DISK_ATTRIBUTE_OFFLINE, DISK_ATTRIBUTE_READ_ONLY, GET_DISK_ATTRIBUTES,
         IOCTL_DISK_GET_DISK_ATTRIBUTES,
     };
     const SIZE: usize = std::mem::size_of::<GET_DISK_ATTRIBUTES>();
-    let bytes = query::<SIZE>(file, IOCTL_DISK_GET_DISK_ATTRIBUTES)?;
+    let bytes = query::<SIZE>(file, IOCTL_DISK_GET_DISK_ATTRIBUTES).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("Cannot confirm the disk offline state: {error}"),
+        )
+    })?;
     let version = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
     let attributes = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
     if version != SIZE

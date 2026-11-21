@@ -1,5 +1,5 @@
 use super::{ClonePlan, unchanged};
-use crate::invalid;
+use crate::{Disk, direct_transport, invalid};
 use std::{io, time::Duration};
 
 #[cfg(windows)]
@@ -85,7 +85,7 @@ impl PreparedClone {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         let parent_handle = super::windows::hold_directory(parent)?;
-        check_journal(&parent_handle, &plan)?;
+        check_journal(&parent_handle, &plan, &crate::disks()?)?;
         let mut random = [0; 16];
         getrandom::fill(&mut random).map_err(io::Error::other)?;
         let nonce = u128::from_be_bytes(random);
@@ -123,7 +123,8 @@ impl ApprovedClone {
 
     pub fn prepare_journal(self, resume: bool) -> io::Result<PhysicalSession> {
         let plan = &self.0.plan;
-        check_journal(&self.0.parent_handle, plan)?;
+        let inventory = crate::disks()?;
+        check_journal(&self.0.parent_handle, plan, &inventory)?;
         let named_parent = super::windows::hold_directory(&self.0.parent)?;
         if crate::file_id(&named_parent)? != crate::file_id(&self.0.parent_handle)? {
             return Err(invalid("Journal directory moved during plan confirmation"));
@@ -132,7 +133,7 @@ impl ApprovedClone {
             std::fs::create_dir(&self.0.job)?;
         }
         let dir = super::windows::hold_directory(&self.0.job)?;
-        check_journal(&dir, plan)?;
+        check_journal(&dir, plan, &inventory)?;
         Ok(PhysicalSession {
             approval: self,
             _dir: dir,
@@ -154,14 +155,21 @@ impl PhysicalSession {
 
     pub fn open(self, files: [&File; 2]) -> io::Result<OpenPhysicalSession> {
         let before = &self.approval.0.plan;
-        for file in files {
-            check_journal(file, before)?;
-        }
         let fresh = super::plan_disks(before.source.number, before.target.number)?;
         recheck(before, &fresh)?;
         let (source, target) = open_clone_handles(&fresh.source, &fresh.target)?;
         let after = super::plan_disks(before.source.number, before.target.number)?;
         recheck(before, &after)?;
+        let inventory = crate::disks()?;
+        if [&before.source, &before.target]
+            .iter()
+            .any(|disk| !unchanged(disk, &inventory) || super::identity_conflict(disk, &inventory))
+        {
+            return Err(invalid("Clone endpoints changed during journal validation"));
+        }
+        for file in files {
+            check_journal(file, before, &inventory)?;
+        }
         target.assert_writable_offline()?;
         if self.approval.0.created.elapsed() > APPROVAL_TTL {
             return Err(invalid("Confirmation expired during device revalidation"));
@@ -175,17 +183,29 @@ impl PhysicalSession {
 }
 
 #[cfg(windows)]
-fn check_journal(file: &File, plan: &ClonePlan) -> io::Result<()> {
+fn check_journal(file: &File, plan: &ClonePlan, inventory: &[Disk]) -> io::Result<()> {
     let disks = super::windows::journal_disks(file)?;
-    journal_is_disjoint(&disks, plan)
+    journal_is_disjoint(&disks, plan, inventory)
 }
 
-fn journal_is_disjoint(disks: &[u32], plan: &ClonePlan) -> io::Result<()> {
+fn journal_is_disjoint(disks: &[u32], plan: &ClonePlan, inventory: &[Disk]) -> io::Result<()> {
     if disks.is_empty()
         || disks.contains(&plan.source.number)
         || disks.contains(&plan.target.number)
     {
         return Err(invalid("Journal must reside outside both clone devices"));
+    }
+    for number in disks {
+        let mut devices = inventory.iter().filter(|disk| disk.number == *number);
+        if !devices
+            .next()
+            .is_some_and(|device| direct_transport(&device.bus))
+            || devices.next().is_some()
+        {
+            return Err(invalid(
+                "Journal backing disks must resolve to direct physical storage",
+            ));
+        }
     }
     Ok(())
 }
@@ -239,10 +259,21 @@ mod tests {
     #[test]
     fn journal_must_be_on_other_storage_for_every_extent() {
         let plan = plan();
-        assert!(journal_is_disjoint(&[7, 8], &plan).is_ok());
-        assert!(journal_is_disjoint(&[7, plan.source.number], &plan).is_err());
-        assert!(journal_is_disjoint(&[7, plan.target.number], &plan).is_err());
-        assert!(journal_is_disjoint(&[], &plan).is_err());
+        let known = [disk(7), disk(8)];
+        assert!(journal_is_disjoint(&[7, 8], &plan, &known).is_ok());
+        assert!(journal_is_disjoint(&[7, plan.source.number], &plan, &known).is_err());
+        assert!(journal_is_disjoint(&[7, plan.target.number], &plan, &known).is_err());
+        assert!(journal_is_disjoint(&[], &plan, &known).is_err());
+    }
+
+    #[test]
+    fn virtual_missing_or_ambiguous_journal_backings_are_rejected() {
+        let plan = plan();
+        let mut virtual_disk = disk(8);
+        virtual_disk.bus = "File Backed Virtual".into();
+        assert!(journal_is_disjoint(&[7, 8], &plan, &[disk(7), virtual_disk]).is_err());
+        assert!(journal_is_disjoint(&[7, 8], &plan, &[disk(7)]).is_err());
+        assert!(journal_is_disjoint(&[7, 8], &plan, &[disk(7), disk(8), disk(8)]).is_err());
     }
 
     #[test]

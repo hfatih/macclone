@@ -153,6 +153,17 @@ pub(super) fn unchanged(selected: &Disk, refreshed: &[Disk]) -> bool {
     &current == selected && found.next().is_none()
 }
 
+pub(super) fn identity_conflict(selected: &Disk, inventory: &[Disk]) -> bool {
+    let collides = |value: &Option<String>, other: &Option<String>| {
+        matches!((value, other), (Some(a), Some(b)) if !a.trim().is_empty()
+            && a.trim().eq_ignore_ascii_case(b.trim()))
+    };
+    inventory.iter().any(|disk| {
+        disk.number != selected.number
+            && (collides(&selected.id, &disk.id) || collides(&selected.serial, &disk.serial))
+    })
+}
+
 pub fn plan_disks(source: u32, target: u32) -> io::Result<ClonePlan> {
     let inventory = disks()?;
     let pick = |n| {
@@ -167,14 +178,7 @@ pub fn plan_disks(source: u32, target: u32) -> io::Result<ClonePlan> {
     let target = pick(target)?;
     let mut blockers = plan(&source, &target);
     for selected in [&source, &target] {
-        let collides = |value: &Option<String>, other: &Option<String>| {
-            matches!((value, other), (Some(a), Some(b)) if !a.trim().is_empty()
-                && a.trim().eq_ignore_ascii_case(b.trim()))
-        };
-        if inventory.iter().any(|disk| {
-            disk.number != selected.number
-                && (collides(&selected.id, &disk.id) || collides(&selected.serial, &disk.serial))
-        }) {
+        if identity_conflict(selected, &inventory) {
             blockers.push(format!(
                 "Disk {} has a duplicate ID or serial in the inventory",
                 selected.number
@@ -187,11 +191,11 @@ pub fn plan_disks(source: u32, target: u32) -> io::Result<ClonePlan> {
         match disks() {
             Ok(refreshed) => {
                 for disk in [&source, &target] {
-                    if !unchanged(disk, &refreshed) {
+                    if !unchanged(disk, &refreshed) || identity_conflict(disk, &refreshed) {
                         topology.report_error(
                             "disk_selection_changed",
                             format!(
-                                "Disk {} planlama sırasında değişti veya kayboldu.",
+                                "Disk {} planlama sırasında değişti, kayboldu veya kimliği başka bir diskle çakıştı.",
                                 disk.number
                             ),
                             None,
@@ -225,6 +229,19 @@ pub fn plan_disks(source: u32, target: u32) -> io::Result<ClonePlan> {
 mod tests {
     use super::*;
     use crate::tests::disk;
+
+    #[test]
+    fn refreshed_inventory_detects_a_new_duplicate_serial() {
+        let selected = disk(3);
+        let mut competitor = disk(7);
+        let serial = selected.serial.as_deref().unwrap();
+        competitor.serial = Some(format!(" {} ", serial.to_lowercase()));
+        assert!(identity_conflict(
+            &selected,
+            &[selected.clone(), competitor]
+        ));
+        assert!(!identity_conflict(&selected, &[selected.clone(), disk(9)]));
+    }
 
     #[test]
     fn windows_and_efi_on_separate_disks_and_letterless_spanned_volume() {

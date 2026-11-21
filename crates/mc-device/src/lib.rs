@@ -175,6 +175,12 @@ pub use topology::{CloneLayout, ClonePlan, TopologyIssue, plan_disks};
 #[cfg(all(windows, feature = "windows-physical-clone"))]
 pub use win::PhysicalTarget;
 
+fn direct_transport(bus: &str) -> bool {
+    ["USB", "SATA", "ATA", "NVME"]
+        .iter()
+        .any(|known| bus.eq_ignore_ascii_case(known))
+}
+
 fn plan(source: &Disk, target: &Disk) -> Vec<String> {
     let mut reasons = Vec::new();
     let id = |s: &Option<String>| s.as_deref().unwrap_or("").trim().to_ascii_uppercase();
@@ -206,10 +212,7 @@ fn plan(source: &Disk, target: &Disk) -> Vec<String> {
         {
             reasons.push(format!("Disk {} has unsupported geometry", d.number))
         }
-        if !matches!(
-            d.bus.to_ascii_uppercase().as_str(),
-            "USB" | "SATA" | "ATA" | "NVME"
-        ) {
+        if !direct_transport(&d.bus) {
             reasons.push(format!("Disk {} has unsupported topology", d.number))
         }
     }
