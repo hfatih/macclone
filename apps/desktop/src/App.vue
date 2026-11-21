@@ -7,7 +7,7 @@ import {
   RefreshCw, ScanSearch, Settings2, ShieldCheck,
 } from '@lucide/vue'
 import logo from '../src-tauri/icons/icon.png'
-import { api, type Disk, type Input, type Layout, type Status } from './api'
+import { api, type ClonePlan, type Disk, type Input, type Layout, type Status } from './api'
 import { diskLabel, formatBytes, outcomeLabel } from './ui'
 import DeviceTable from './DeviceTable.vue'
 import OperationPanel from './OperationPanel.vue'
@@ -63,7 +63,8 @@ const resume = ref(false)
 const sector = ref(512)
 const block = ref(1048576)
 const layout = ref<Layout | null>(null)
-const planErrors = ref<string[] | null>(null)
+const planResult = ref<ClonePlan | null>(null)
+const imagePreset = ref<{ source: Disk; target: Disk } | null>(null)
 const status = ref<Status | null>(null)
 const startingId = ref<number | null>(null)
 const stoppingId = ref<number | null>(null)
@@ -91,6 +92,15 @@ const busy = computed(() => Boolean(action.value || status.value?.running || sta
 const stopping = computed(() => stoppingId.value !== null && status.value?.id === stoppingId.value)
 const validDigest = computed(() => /^[a-f0-9]{64}$/i.test(expected.value.trim()))
 const invalidDigest = computed(() => Boolean(expected.value.trim()) && !validDigest.value)
+const gptFit = computed(() => planResult.value?.gpt_fit)
+const canUseFit = computed(() => !busy.value && !inventoryLoading.value
+  && gptFit.value?.state === 'fits' && gptFit.value.target_bytes === targetDisk.value?.bytes)
+const presetValid = computed(() => {
+  const preset = imagePreset.value
+  return !preset || (mode.value === 'disk'
+    && hasSameGeometry(preset.source, sourceDisk.value)
+    && hasSameGeometry(preset.target, targetDisk.value))
+})
 const subject = computed<Input | null>(() => {
   if (mode.value === 'image') {
     return path.value.trim() ? { kind: 'image', path: path.value.trim(), sector: sector.value } : null
@@ -101,7 +111,7 @@ const subject = computed<Input | null>(() => {
 const canStart = computed(() => {
   if (!subject.value || busy.value || (mode.value === 'disk' && inventoryLoading.value)) return false
   if (imagePage.value) {
-    return Boolean(directory.value.trim()) && (mode.value !== 'disk' || sourceDisk.value?.offline === true)
+    return Boolean(directory.value.trim()) && presetValid.value && (mode.value !== 'disk' || sourceDisk.value?.offline === true)
   }
   if (page.value === 'verify') {
     return validDigest.value && (mode.value !== 'disk' || sourceDisk.value?.offline === true)
@@ -113,8 +123,8 @@ const planHint = computed(() => {
   const b = targetDisk.value
   if (!a || !b) return null
   if (a.number === b.number) return { tone: 'warning', message: 'Kaynak ve hedef için farklı diskler seçin.' }
-  if (a.bytes > b.bytes) return { tone: 'warning', message: 'Hedef tam disk kopyası için küçük. Küçük bir RAW imaj oluşturmak için mevcut GPT bölümlerinin hedefe sığması gerekir.' }
   if (a.logical !== b.logical) return { tone: 'warning', message: 'Disklerin mantıksal sektör boyutları farklı.' }
+  if (a.bytes > b.bytes) return { tone: 'neutral', message: 'Plan denetimi, mevcut GPT bölümlerinin daha küçük hedefe sığıp sığmadığını ölçer.' }
   if (a.bytes < b.bytes) return { tone: 'neutral', message: 'Büyük hedef için sağlam bir GPT ve ayrı bir GPT taşıma onayı gerekir.' }
   return { tone: 'neutral', message: 'Eşit kapasitede tam disk kopyası planlanır.' }
 })
@@ -132,6 +142,7 @@ const startLabel = computed(() => {
 
 async function navigate(destination: Page) {
   if (page.value === destination) return
+  if (page.value === 'image') imagePreset.value = null
   page.value = destination
   await nextTick()
   heading.value?.focus()
@@ -163,6 +174,10 @@ function apply(next: Status) {
 
 function isSameDisk(previous: Disk | undefined, next: Disk | undefined) {
   return Boolean(previous?.id && next && previous.id === next.id && previous.serial === next.serial)
+}
+
+function hasSameGeometry(previous: Disk, next: Disk | undefined) {
+  return next !== undefined && isSameDisk(previous, next) && previous.bytes === next.bytes && previous.logical === next.logical
 }
 
 async function refresh() {
@@ -217,7 +232,7 @@ async function start() {
   await act(current === 'verify' ? 'verify' : 'image', async () => {
     const id = current === 'verify'
       ? await api.verify(input, expected.value.trim())
-      : await api.image(input, directory.value.trim(), block.value, current === 'recovery', resume.value)
+      : await api.image(input, directory.value.trim(), block.value, current === 'recovery', resume.value, imagePreset.value?.target.bytes)
     if ((status.value?.id ?? 0) < id) startingId.value = id
     await pollStatus()
   })
@@ -228,11 +243,22 @@ async function checkPlan() {
   const destination = targetDisk.value
   if (!source || !destination || !canPlan.value) return
   const revision = selectionRevision
-  planErrors.value = null
+  planResult.value = null
   await act('plan', async () => {
-    const blockers = await api.plan(source, destination)
-    if (revision === selectionRevision) planErrors.value = blockers
+    const result = await api.plan(source, destination)
+    if (revision === selectionRevision) planResult.value = result
   })
+}
+
+async function openSizedImage() {
+  const source = sourceDisk.value
+  const destination = targetDisk.value
+  if (!source || !destination || !canUseFit.value) return
+  mode.value = 'disk'
+  directory.value = ''
+  resume.value = false
+  imagePreset.value = { source, target: destination }
+  await navigate('image')
 }
 
 function reverseDirection() {
@@ -263,11 +289,11 @@ async function cancelOperation() {
   }
 }
 
-watch([page, selected, target, path, sector, mode, disks], () => {
+watch([page, selected, target, path, sector, mode, disks, inventoryLoading], () => {
   selectionRevision++
   actionError.value = ''
   layout.value = null
-  planErrors.value = null
+  planResult.value = null
 }, { flush: 'sync' })
 
 async function pollStatus() {
@@ -440,12 +466,30 @@ onUnmounted(() => {
               <ArrowLeftRight :size="17" aria-hidden="true" /> Kaynak ve hedefi değiştir
             </button>
           </div>
-          <div v-if="planErrors !== null" class="notice" :class="planErrors.length ? 'notice-danger' : 'notice-success'" role="status">
-            <CircleAlert v-if="planErrors.length" :size="18" aria-hidden="true" /><CircleCheck v-else :size="18" aria-hidden="true" />
+          <div v-if="planResult" class="notice" :class="planResult.blockers.length ? 'notice-warning' : 'notice-success'" role="status">
+            <CircleAlert v-if="planResult.blockers.length" :size="18" aria-hidden="true" /><CircleCheck v-else :size="18" aria-hidden="true" />
             <div>
-              <strong>{{ planErrors.length ? 'Klon planı engellendi' : 'Aygıt uyumluluğu denetimi geçti' }}</strong>
-              <ul v-if="planErrors.length"><li v-for="reason in planErrors" :key="reason">{{ reason }}</li></ul>
+              <strong>{{ planResult.blockers.length ? 'Fiziksel klon planı engellendi' : 'Aygıt uyumluluğu denetimi geçti' }}</strong>
+              <ul v-if="planResult.blockers.length"><li v-for="reason in planResult.blockers" :key="reason">{{ reason }}</li></ul>
             </div>
+          </div>
+          <div v-if="gptFit" class="notice" :class="gptFit.state === 'fits' ? 'notice-success' : 'notice-danger'" role="status">
+            <CircleCheck v-if="gptFit.state === 'fits'" :size="18" aria-hidden="true" />
+            <CircleAlert v-else :size="18" aria-hidden="true" />
+            <div v-if="gptFit.state === 'fits'">
+              <strong>GPT bölümleri hedef boyutuna sığıyor</strong>
+              <p>Hedef {{ formatBytes(gptFit.target_bytes) }} · Gerekli en az {{ formatBytes(gptFit.minimum_bytes) }}</p>
+              <p>Bu boyutta yeni bir RAW dosyası oluşturabilirsiniz.</p>
+            </div>
+            <div v-else>
+              <strong>Küçük RAW imaj için GPT denetimi geçmedi</strong>
+              <p>{{ gptFit.reason }}</p>
+            </div>
+          </div>
+          <div v-if="gptFit?.state === 'fits'" class="actions">
+            <button type="button" class="button button-quiet" :disabled="!canUseFit" @click="openSizedImage">
+              <FileArchive :size="17" aria-hidden="true" /> Bu boyutta RAW imaj al
+            </button>
           </div>
         </form>
       </section>
@@ -484,6 +528,15 @@ onUnmounted(() => {
               <span v-if="inventoryError" class="text-danger">{{ inventoryError }}</span>
             </template>
             <template v-if="imagePage">
+              <div v-if="imagePreset" class="notice" :class="presetValid ? 'notice-neutral' : 'notice-warning'" role="status">
+                <FileArchive :size="17" aria-hidden="true" />
+                <div>
+                  <strong>RAW imaj boyutu {{ formatBytes(imagePreset.target.bytes) }}</strong>
+                  <p v-if="!presetValid">Disk seçimi veya geometrisi değişti. Klon planını yeniden denetleyin.</p>
+                  <p v-else>{{ imagePreset.target.model }} kapasitesinde bir dosya oluşturulur.</p>
+                  <p><button class="text-button" type="button" :disabled="busy" @click="imagePreset = null">Tam boyutlu imaja dön</button></p>
+                </div>
+              </div>
               <label class="field">İş klasörünün tam yolu
                 <input v-model="directory" type="text" placeholder="E:\Kurtarma\Mac-001" autocomplete="off" spellcheck="false">
               </label>

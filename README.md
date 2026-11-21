@@ -14,7 +14,7 @@ MacClone, HDD ve SSD arasında her iki yönde çalışacak şekilde tasarlandı.
 |---|---|
 | HDD → SSD veya SSD → HDD, eşit kapasite ve aynı mantıksal sektör boyu | EFI, GPT, APFS/HFS+ ve ayrılmamış alanlar dahil tam disk, bayt bayt kopyalanır. |
 | Kaynak daha küçük, hedef daha büyük, mantıksal sektör boyu eşit | Sağlam GPT için `--relocate-gpt` kullanılır. Koruyucu MBR ve GPT başlıkları güncellenir, yedek tablo son LBA'ya taşınır. Bölüm GUID'leri, sınırları ve içerikleri korunur. Ek alan boş kalır. |
-| Hedef daha küçük, mevcut GPT bölümleri hedefe sığıyor | CLI, hedef boyutunda bağımsız bir RAW imaj oluşturabilir. Fiziksel klon planı engellenir. |
+| Hedef daha küçük, mevcut GPT bölümleri hedefe sığıyor | Masaüstü ve CLI, hedef boyutunda bağımsız bir RAW imaj oluşturabilir. Fiziksel klon planı engellenir. |
 | Mantıksal sektör boyu farklı veya mevcut bölümler hedefe sığmıyor | İlgili klon veya hedef boyutu için imaj işlemi engellenir. |
 | Büyük hedef, kaynakta hasarlı ya da hibrit GPT | GPT taşıma işlemi reddedilir. Kaynağın kendi boyutunda RAW imaj alınabilir. |
 
@@ -46,6 +46,10 @@ cargo build --locked -p macclone --features windows-physical-clone
 ### Daha küçük hedef için RAW imaj
 
 Örneğin 320 GB diskte 100 GB dosya bulunabilir ve APFS bölümü yine de diskin sonuna kadar uzanabilir. MacClone, dosya doluluğu yerine GPT'deki bölüm sınırlarını ve yedek tablonun kaplayacağı alanı denetler. Bölümler zaten sığıyorsa yeni imaj ayrılmamış son alanı dışarıda bırakır, koruyucu MBR'yi günceller ve yedek GPT'yi yeni son sektöre taşır. APFS ve HFS+ bölümleri mevcut boyutlarını korur.
+
+Windows masaüstünde, çevrimdışı kaynak ile küçük SSD'yi **Klon planı** ekranında seçip **Planı denetle**'ye basın. Sığıyorsa **Bu boyutta RAW imaj al** düğmesi SSD'nin envanterden okunan kapasitesini kullanarak imaj ekranını açar. Çıktı seçtiğiniz iş klasöründe oluşur. SSD yalnızca boyut referansı olarak kullanılır.
+
+CLI üzerinden bir RAW dosyasını denetlemek ve dönüştürmek için şu komutları kullanın.
 
 ```powershell
 macclone.exe dry-run SOURCE.raw --target-bytes 256000000000

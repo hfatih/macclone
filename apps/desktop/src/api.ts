@@ -26,6 +26,11 @@ export interface Layout {
   partitions: { start_lba: number; end_lba: number; kind: string; label: string; filesystem: string }[]
 }
 
+export interface ClonePlan {
+  blockers: string[]
+  gpt_fit: { state: 'fits'; target_bytes: number; minimum_bytes: number } | { state: 'blocked'; reason: string } | null
+}
+
 export type Outcome = 'idle' | 'running' | 'completed' | 'partial' | 'cancelled' | 'failed'
 
 export interface Status {
@@ -42,15 +47,15 @@ export interface Status {
 export const api = {
   disks: () => invoke<Disk[]>('list_disks'),
   inspect: (input: Input) => invoke<Layout>('inspect_disk', { input }),
-  plan: (source: Disk, target: Disk) => invoke<string[]>('plan_clone', {
+  plan: (source: Disk, target: Disk) => invoke<ClonePlan>('plan_clone', {
     source: source.number,
     target: target.number,
     sourceId: source.id,
     targetId: target.id,
   }),
   status: () => invoke<Status>('get_operation_status'),
-  image: (input: Input, directory: string, block: number, recovery: boolean, resume: boolean) =>
-    invoke<number>('create_image', { request: { input, directory, options: { block, recovery }, resume } }),
+  image: (input: Input, directory: string, block: number, recovery: boolean, resume: boolean, targetBytes?: number) =>
+    invoke<number>('create_image', { request: { input, directory, options: { block, recovery }, resume, target_bytes: targetBytes } }),
   verify: (input: Input, expected: string) => invoke<number>('verify_image', { input, expected }),
   cancel: (id: number) => invoke<void>('cancel_operation', { id }),
 }

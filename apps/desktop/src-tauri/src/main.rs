@@ -57,6 +57,58 @@ struct Request {
     directory: PathBuf,
     options: Options,
     resume: bool,
+    target_bytes: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct DesktopPlan {
+    blockers: Vec<String>,
+    gpt_fit: Option<GptFit>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum GptFit {
+    Fits {
+        target_bytes: u64,
+        minimum_bytes: u64,
+    },
+    Blocked {
+        reason: String,
+    },
+}
+
+fn check_gpt_fit(source: &Disk, target: &Disk) -> io::Result<mc_inspect::GptRelocation> {
+    if source.logical != target.logical {
+        return Err(mc_device::invalid(
+            "Disklerin mantıksal sektör boyutları farklı.",
+        ));
+    }
+    if source.offline != Some(true) {
+        return Err(mc_device::invalid(
+            "GPT denetimi için kaynak disk çevrimdışı olmalıdır.",
+        ));
+    }
+    let id = source
+        .id
+        .clone()
+        .ok_or_else(|| mc_device::invalid("Kaynak disk kimliği alınamadı."))?;
+    let input = Input::Disk {
+        number: source.number,
+        id,
+    };
+    let mut opened = open_source(&input, true)?;
+    if opened.stamp.bytes != source.bytes || opened.stamp.sector != source.logical {
+        return Err(mc_device::invalid(
+            "Kaynak geometrisi değişti. Diskleri yenileyip planı tekrar denetleyin.",
+        ));
+    }
+    mc_inspect::GptRelocation::prepare(
+        &mut opened.reader,
+        opened.stamp.bytes,
+        target.bytes,
+        opened.stamp.sector,
+    )
 }
 #[tauri::command]
 async fn list_disks() -> Api<Vec<Disk>> {
@@ -81,13 +133,27 @@ async fn plan_clone(
     target: u32,
     source_id: Option<String>,
     target_id: Option<String>,
-) -> Api<Vec<String>> {
+) -> Api<DesktopPlan> {
     tauri::async_runtime::spawn_blocking(move || {
         let report = mc_device::plan_disks(source, target).map_err(err)?;
         if report.source.id != source_id || report.target.id != target_id {
             return Err("Disk seçimi değişti. Envanteri yenileyip yeniden seçin.".into());
         }
-        Ok(report.blockers)
+        let gpt_fit = (report.source.bytes > report.target.bytes).then(|| {
+            match check_gpt_fit(&report.source, &report.target) {
+                Ok(gpt) => GptFit::Fits {
+                    target_bytes: gpt.target_bytes(),
+                    minimum_bytes: gpt.minimum_target_bytes(),
+                },
+                Err(error) => GptFit::Blocked {
+                    reason: error.to_string(),
+                },
+            }
+        });
+        Ok(DesktopPlan {
+            blockers: report.blockers,
+            gpt_fit,
+        })
     })
     .await
     .map_err(err)?
@@ -187,14 +253,25 @@ fn create_image(app: AppHandle, request: Request) -> Api<u64> {
         Operation::Image
     };
     job(app, operation, move |c, p| {
-        let r = mc_engine::run(
-            &request.input,
-            &request.directory,
-            request.options,
-            request.resume,
-            c,
-            p,
-        )?;
+        let r = match request.target_bytes {
+            Some(bytes) => mc_engine::run_relocated(
+                &request.input,
+                &request.directory,
+                bytes,
+                request.options,
+                request.resume,
+                c,
+                p,
+            )?,
+            None => mc_engine::run(
+                &request.input,
+                &request.directory,
+                request.options,
+                request.resume,
+                c,
+                p,
+            )?,
+        };
         Ok((Some(r), "İmaj raporu iş klasörüne kaydedildi.".into()))
     })
 }
