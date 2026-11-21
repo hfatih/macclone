@@ -15,6 +15,7 @@
 | Vite, Vue Vite eklentisi, Tailwind CSS, PostCSS, Autoprefixer | Üretim varlıkları, stiller, çevrimdışı çalışan arayüz | MIT |
 | ESLint, typescript-eslint, eslint-plugin-vue | Derlemeden bağımsız statik frontend denetimi | MIT |
 | partition-manager CLI v0.4.1 (yalnızca karşılaştırma testi) | Sabit upstream commit ile tüm-disk RAW kopyasının bayt düzeyinde çapraz kontrolü. MacClone paketine bağlanmaz. | MIT |
+| getrandom (isteğe bağlı) | Fiziksel klon onayında işletim sistemi rastgeleliği | MIT OR Apache-2.0 |
 | tempfile (yalnızca test) | İzole ve temizlenen hata senaryoları | MIT OR Apache-2.0 |
 
 Disk I/O tek sahipli, sıralı ve bloklayıcıdır. Tauri'nin async runtime'ı işleri arayüzden ayırır. Ayrı Tokio runtime, BLAKE3 veya bir filesystem sürücüsü eklemek ilk sürüm için gerekli değildir. Cargo.lock ve package-lock.json çözülmüş sürümleri sabitler. Doğrudan/transitif envanter için LICENSE_AUDIT.md dosyasına bakın.

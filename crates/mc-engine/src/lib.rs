@@ -1,4 +1,9 @@
 //! Regular-file acquisition, append-only checkpoint journal and independent destination reread.
+#[cfg(all(windows, feature = "windows-physical-clone"))]
+mod physical;
+#[cfg(all(windows, feature = "windows-physical-clone"))]
+pub use physical::clone_physical;
+
 use mc_device::{Input, Source, Stamp, file_id, invalid, local_path, open_source};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -71,6 +76,8 @@ pub struct Report {
     pub logical_sector: u32,
     pub schema_version: u32,
     pub source_identity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_identity: Option<String>,
 }
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -187,12 +194,12 @@ pub fn run(
 }
 fn run_with(
     input: &Input,
-    mut source: Source,
+    source: Source,
     dir: &Path,
     options: Options,
     resume: bool,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(Progress),
+    progress: impl FnMut(Progress),
 ) -> io::Result<Report> {
     local_path(dir)?;
     options.validate(source.stamp.sector)?;
@@ -203,21 +210,132 @@ fn run_with(
     if !fs::symlink_metadata(dir)?.is_dir() {
         return Err(invalid("Expected a local job directory"));
     }
-    let mut manifest = regular(&dir.join("job.json"), !resume)?;
-    manifest.try_lock().map_err(io::Error::other)?;
-    let mut target = regular(&dir.join("image.raw"), !resume)?;
-    let mut map = regular(&dir.join("map.jsonl"), !resume)?;
-    let mut handles = vec![&manifest, &target, &map];
-    if let Some(ref f) = source.backing_file {
-        handles.push(f)
+    let path = dir.join("image.raw");
+    let mut target = ImageTarget {
+        file: regular(&path, !resume)?,
+        path,
+    };
+    let job = Journal::open(dir, resume)?;
+    if let Some(f) = source.backing_file.as_ref() {
+        distinct(&[f, &target.file, &job.manifest, &job.map])?;
+    } else {
+        distinct(&[&target.file, &job.manifest, &job.map])?;
     }
-    distinct(&handles)?;
+    transfer(input, source, &mut target, job, options, cancel, progress)
+}
+
+struct Journal<'a> {
+    dir: &'a Path,
+    resume: bool,
+    manifest: File,
+    map: File,
+}
+
+impl<'a> Journal<'a> {
+    fn open(dir: &'a Path, resume: bool) -> io::Result<Self> {
+        let manifest = regular(&dir.join("job.json"), !resume)?;
+        manifest.try_lock().map_err(io::Error::other)?;
+        let map = regular(&dir.join("map.jsonl"), !resume)?;
+        distinct(&[&manifest, &map])?;
+        Ok(Self {
+            dir,
+            resume,
+            manifest,
+            map,
+        })
+    }
+}
+
+trait Target: Read + Seek + Durable {
+    type Snapshot;
+    const REPORT_DEVICE_IDENTITY: bool = false;
+    fn identity(&self) -> io::Result<String>;
+    fn length(&self) -> io::Result<u64>;
+    fn snapshot(&self, total: u64) -> io::Result<Self::Snapshot>;
+    fn check_snapshot(&self, total: u64, snapshot: Self::Snapshot) -> io::Result<()>;
+}
+
+struct ImageTarget {
+    file: File,
+    path: std::path::PathBuf,
+}
+
+impl Read for ImageTarget {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.file.read(bytes)
+    }
+}
+
+impl Write for ImageTarget {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.file.write(bytes)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl Seek for ImageTarget {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.file.seek(position)
+    }
+}
+
+impl Durable for ImageTarget {
+    fn durable(&mut self) -> io::Result<()> {
+        self.file.sync_all()
+    }
+}
+
+impl Target for ImageTarget {
+    type Snapshot = std::time::SystemTime;
+    fn identity(&self) -> io::Result<String> {
+        Ok(file_id(&self.file)?.0)
+    }
+    fn length(&self) -> io::Result<u64> {
+        Ok(self.file.metadata()?.len())
+    }
+    fn snapshot(&self, total: u64) -> io::Result<Self::Snapshot> {
+        let metadata = self.file.metadata()?;
+        if metadata.len() != total {
+            return Err(invalid("Destination length differs from source"));
+        }
+        metadata.modified()
+    }
+    fn check_snapshot(&self, total: u64, modified: Self::Snapshot) -> io::Result<()> {
+        let named = File::open(&self.path)?;
+        let metadata = named.metadata()?;
+        if file_id(&named)? != (self.identity()?, 1)
+            || metadata.len() != total
+            || metadata.modified()? != modified
+        {
+            return Err(invalid("Destination file changed during verification"));
+        }
+        Ok(())
+    }
+}
+
+fn transfer<T: Target>(
+    input: &Input,
+    mut source: Source,
+    target: &mut T,
+    job: Journal<'_>,
+    options: Options,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(Progress),
+) -> io::Result<Report> {
+    let Journal {
+        dir,
+        resume,
+        mut manifest,
+        mut map,
+    } = job;
     let actual = Manifest {
         version: 1,
         input: input.clone(),
         source: source.stamp.clone(),
         options,
-        target_id: file_id(&target)?.0,
+        target_id: target.identity()?,
         map_id: file_id(&map)?.0,
     };
     if resume {
@@ -232,7 +350,7 @@ fn run_with(
     let total = source.stamp.bytes;
     let sector = source.stamp.sector;
     let mut buffer = vec![0; options.block as usize];
-    if target.metadata()?.len() > total {
+    if target.length()? > total {
         return Err(invalid("Target is longer than source"));
     }
     let mut offset = 0;
@@ -276,7 +394,7 @@ fn run_with(
             return Err(invalid("Invalid recovery map"));
         }
         let buf = &mut buffer[..n];
-        read_at(&mut target, offset, buf)?;
+        read_at(target, offset, buf)?;
         if digest(buf) != rec.sha256 {
             return Err(invalid("Checkpoint target hash mismatch"));
         }
@@ -337,7 +455,7 @@ fn run_with(
             sha256: digest(buf),
             missing: holes,
         };
-        commit(&mut target, &mut map, buf, &rec)?;
+        commit(target, &mut map, buf, &rec)?;
         stream.update(buf);
         offset = rec.end;
         missing += rec.missing.len() as u64;
@@ -349,12 +467,8 @@ fn run_with(
         });
     }
     let expected = format!("{:x}", stream.finalize());
-    let before_verification = target.metadata()?;
-    if before_verification.len() != total {
-        return Err(invalid("Destination length differs from source"));
-    }
-    let target_modified = before_verification.modified()?;
-    let actual_hash = hash_reader(&mut target, total, &mut buffer, cancel, |bytes| {
+    let target_snapshot = target.snapshot(total)?;
+    let actual_hash = hash_reader(target, total, &mut buffer, cancel, |bytes| {
         progress(Progress {
             phase: "verify".into(),
             bytes,
@@ -365,13 +479,7 @@ fn run_with(
     if actual_hash != expected {
         return Err(invalid("Destination SHA-256 mismatch"));
     }
-    let named_target = File::open(dir.join("image.raw"))?;
-    if file_id(&named_target)? != (actual.target_id, 1)
-        || named_target.metadata()?.len() != total
-        || named_target.metadata()?.modified()? != target_modified
-    {
-        return Err(invalid("Destination file changed during verification"));
-    }
+    target.check_snapshot(total, target_snapshot)?;
     check_source_file(input, &source)?;
     checkpoint(cancel)?;
     let report = Report {
@@ -384,6 +492,7 @@ fn run_with(
         logical_sector: sector,
         schema_version: 1,
         source_identity: source.stamp.identity,
+        destination_identity: T::REPORT_DEVICE_IDENTITY.then_some(actual.target_id),
     };
     // Publish only a complete report. A resume of a completed job checks the old report.
     let path = dir.join("report.json");
@@ -890,5 +999,156 @@ mod tests {
         let s = open_source(&j.src, true).unwrap();
         Options::default().validate(s.stamp.sector).unwrap();
         assert!(!j.out.exists())
+    }
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::*;
+    use std::{cell::Cell, io::Cursor};
+
+    struct FixedTarget {
+        device: Cursor<Vec<u8>>,
+        id: String,
+        write_until: Option<u64>,
+        verifying: Cell<bool>,
+        corrupt_reread: bool,
+    }
+
+    impl Read for FixedTarget {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            let n = self.device.read(bytes)?;
+            if self.corrupt_reread && self.verifying.get() && n > 0 {
+                bytes[0] ^= 1;
+            }
+            Ok(n)
+        }
+    }
+    impl Seek for FixedTarget {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            self.device.seek(position)
+        }
+    }
+    impl Write for FixedTarget {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if let Some(limit) = self.write_until {
+                let count = limit
+                    .saturating_sub(self.device.position())
+                    .min(bytes.len() as u64) as usize;
+                if count == 0 {
+                    return Err(io::Error::other("Injected partial write"));
+                }
+                return self.device.write(&bytes[..count]);
+            }
+            self.device.write(bytes)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    impl Durable for FixedTarget {
+        fn durable(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    impl Target for FixedTarget {
+        type Snapshot = ();
+        const REPORT_DEVICE_IDENTITY: bool = true;
+        fn identity(&self) -> io::Result<String> {
+            Ok(self.id.clone())
+        }
+        fn length(&self) -> io::Result<u64> {
+            Ok(self.device.get_ref().len() as u64)
+        }
+        fn snapshot(&self, _: u64) -> io::Result<()> {
+            self.verifying.set(true);
+            Ok(())
+        }
+        fn check_snapshot(&self, _: u64, (): ()) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn fixture() -> (tempfile::TempDir, Input, Vec<u8>, FixedTarget) {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.raw");
+        let payload: Vec<_> = (0..2048).map(|value| (value % 251) as u8).collect();
+        fs::write(&source, &payload).unwrap();
+        (
+            dir,
+            Input::Image {
+                path: source,
+                sector: 512,
+            },
+            payload,
+            FixedTarget {
+                device: Cursor::new(vec![0xD0; 2048]),
+                id: "original-target".into(),
+                write_until: None,
+                verifying: Cell::new(false),
+                corrupt_reread: false,
+            },
+        )
+    }
+
+    fn copy(
+        dir: &Path,
+        source: &Input,
+        target: &mut FixedTarget,
+        resume: bool,
+    ) -> io::Result<Report> {
+        transfer(
+            source,
+            open_source(source, true)?,
+            target,
+            Journal::open(dir, resume)?,
+            Options {
+                block: 512,
+                recovery: false,
+            },
+            &AtomicBool::new(false),
+            |_| (),
+        )
+    }
+
+    #[test]
+    fn partial_write_resumes_only_on_same_fixed_destination() {
+        let (dir, source, bytes, mut target) = fixture();
+        target.write_until = Some(512 + 128);
+        assert!(copy(dir.path(), &source, &mut target, false).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("map.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert!(!dir.path().join("report.json").exists());
+        target.write_until = None;
+        target.id = "replacement-target".into();
+        let after_failure = target.device.get_ref().clone();
+        assert!(copy(dir.path(), &source, &mut target, true).is_err());
+        assert_eq!(target.device.get_ref(), &after_failure);
+        target.id = "original-target".into();
+        let report = copy(dir.path(), &source, &mut target, true).unwrap();
+        assert_eq!(target.device.get_ref(), &bytes);
+        assert_eq!(report.sha256, digest(&bytes));
+        assert_eq!(
+            report.destination_identity.as_deref(),
+            Some("original-target")
+        );
+    }
+
+    #[test]
+    fn failed_destination_reread_never_creates_a_report() {
+        let (dir, source, _, mut target) = fixture();
+        target.corrupt_reread = true;
+        assert!(
+            copy(dir.path(), &source, &mut target, false)
+                .unwrap_err()
+                .to_string()
+                .contains("SHA-256")
+        );
+        assert!(!dir.path().join("report.json").exists());
     }
 }

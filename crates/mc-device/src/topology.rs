@@ -3,6 +3,8 @@ use super::{Disk, disks, invalid, plan};
 use serde::Serialize;
 use std::io;
 
+#[cfg(all(feature = "windows-physical-clone", any(windows, test)))]
+pub(super) mod approval;
 #[cfg(any(windows, test))]
 mod extents;
 #[cfg(any(windows, test))]
@@ -69,6 +71,7 @@ struct Placement {
 #[derive(Default)]
 struct Topology {
     protected: Vec<Placement>,
+    attached: Vec<(String, Vec<u32>)>,
     unresolved: Vec<TopologyIssue>,
 }
 
@@ -84,6 +87,20 @@ impl Topology {
     }
 
     fn issues(mut self, source: u32, target: u32) -> Vec<TopologyIssue> {
+        for (volume, disks) in self.attached {
+            for disk in [source, target] {
+                if disks.contains(&disk) {
+                    self.unresolved.push(TopologyIssue {
+                        code: "attached_volume",
+                        detail: format!(
+                            "Disk {disk}, bağlı bir Windows volume tarafından kullanılıyor."
+                        ),
+                        disk: Some(disk),
+                        volume: Some(volume.clone()),
+                    });
+                }
+            }
+        }
         for placement in self.protected {
             for disk in [source, target] {
                 if placement.disks.contains(&disk) {
@@ -108,7 +125,7 @@ impl Topology {
 }
 
 #[cfg(any(windows, test))]
-fn unchanged(selected: &Disk, refreshed: &[Disk]) -> bool {
+pub(super) fn unchanged(selected: &Disk, refreshed: &[Disk]) -> bool {
     // Health is telemetry. The other fields include identity, geometry and policy inputs.
     let mut found = refreshed.iter().filter(|d| d.number == selected.number);
     let Some(mut current) = found.next().cloned() else {
@@ -131,6 +148,21 @@ pub fn plan_disks(source: u32, target: u32) -> io::Result<ClonePlan> {
     let source = pick(source)?;
     let target = pick(target)?;
     let mut blockers = plan(&source, &target);
+    for selected in [&source, &target] {
+        let collides = |value: &Option<String>, other: &Option<String>| {
+            matches!((value, other), (Some(a), Some(b)) if !a.trim().is_empty()
+                && a.trim().eq_ignore_ascii_case(b.trim()))
+        };
+        if inventory.iter().any(|disk| {
+            disk.number != selected.number
+                && (collides(&selected.id, &disk.id) || collides(&selected.serial, &disk.serial))
+        }) {
+            blockers.push(format!(
+                "Disk {} has a duplicate ID or serial in the inventory",
+                selected.number
+            ));
+        }
+    }
     #[cfg(windows)]
     let topology_issues = {
         let mut topology = windows::observe(&inventory);
@@ -227,6 +259,17 @@ mod tests {
             codes,
             ["location_unresolved", "pagefile_disk", "crash_dump_disk"]
         );
+    }
+
+    #[test]
+    fn attached_data_volume_blocks_clone_even_without_system_role() {
+        let topology = Topology {
+            attached: vec![("attached-volume-guid".into(), vec![4, 2])],
+            ..Default::default()
+        };
+        let issues = topology.issues(1, 2);
+        assert_eq!(issues[0].code, "attached_volume");
+        assert_eq!(issues[0].disk, Some(2));
     }
 
     #[test]

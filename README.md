@@ -1,6 +1,6 @@
 # MacClone
 
-Windows 10/11 x64 için Rust, Tauri 2 ve Vue 3 tabanlı disk inceleme, RAW imaj alma ve kurtarma uygulaması. Bu ilk sürümün yazma hedefi yeni bir iş klasöründeki normal dosyadır. Fiziksel HDD → SSD için kaynak/hedef uyumluluk planı sunar. Fiziksel hedefe aktarım ve RAW imajın SSD'ye geri yüklenmesi sonraki aşamadadır.
+Windows 10/11 x64 için Rust, Tauri 2 ve Vue 3 tabanlı disk inceleme, RAW imaj alma ve kurtarma uygulaması. Standart derleme RAW imaj ve fiziksel klon planı sunar. HDD → SSD aktarımı Windows x64 geliştirme CLI'sinde yer alır ve Windows kabul testine tabidir.
 
 Tam disk kopyasında teknik referansımız MIT lisanslı `inalto/partition-manager` v0.4.1’dir. İki motorun çıktısı, aralarında veri bulunan GPT bölümleriyle otomatik olarak karşılaştırılır. Seçilen komut ve commit `docs/ARCHITECTURE.md`, tekrarlanabilir deney `docs/VALIDATION.md` içindedir.
 
@@ -16,6 +16,20 @@ GitLab geliştirme sırası ve 6.2 Sol için ilk görev [GitLab planında](docs/
 | Kesinti ve kurtarma | Hedef flush sonrasında parça günlüğü, metadata ve veri checksum'ları. İptal, yarım son kayıt ve yeniden başlama. Recovery modunda kesin medya hatasında sektör bazına inip iki deneme yapar. Eksik sektörü açık haritaya kaydeder. Genel I/O veya bağlantı hatası işi durdurur. |
 | Doğrulama | İmajın tamamı yeniden okunur. İlk okumada elde edilen kaynak akışıyla SHA-256 karşılaştırılır. Eksik dolgulu işin sonucu `partial`; CLI çıkış kodu 2. Tam doğrulama kodu 0, başarısız işlem kodu 1. |
 | Masaüstü | Türkçe arayüzden disk listesi, disk klon planı, imaj/kurtarma başlatma ve devam, inceleme, doğrulama, ilerleme ve iptal. Oturum günlüğü ile kalıcı iş kayıtları ayrıdır. |
+
+## Fiziksel HDD → SSD geliştirme sürümü
+
+`windows-physical-clone` Cargo özelliği Windows CLI'ye etkileşimli `clone SOURCE_NUMBER TARGET_NUMBER JOB_DIR [--resume]` komutunu ekler. Varsayılan uygulama sürümü imaj ve salt okunur plan sunar. Aday derleme, yalnızca eşit kapasite ve eşit mantıksal sektör boyuyla çalışır. Kaynak ve hedef çevrimdışı ve bağlı Windows volume'larından ayrı olmalıdır. Günlük dizini üçüncü, erişilebilir bir yerel disk üzerinde olmalıdır. Aynı iş dizininden devam etmek için kaynağı, hedefi ve ayarları koruyun.
+
+Windows kabulü için önce izole, yükseltilmiş Windows x64 VM içinde yalnızca testin oluşturduğu VHDX üzerinde aktarım katmanını doğrulayın.
+
+```powershell
+cargo test --locked -p mc-device --features windows-physical-clone disposable_vhdx_raw_roundtrip -- --ignored --nocapture
+cargo build --locked -p macclone --features windows-physical-clone
+.\target\debug\macclone.exe --help
+```
+
+Donanım kabulünün ayrıntıları ve aday sürümün sınırları [doğrulama kaydında](docs/VALIDATION.md) yer alır.
 
 ## Windows'ta derleme ve başlatma
 
@@ -101,4 +115,4 @@ tests/fixtures/                Test disklerinin açıklaması
 Cargo.toml, Cargo.lock, LICENSE, CONTRIBUTING.md
 ```
 
-Açık kapsam: fiziksel SSD yazma/restore, ayrıcalıklı yazma yardımcısı, detaylı SMART, APFS volume group/snapshot/Preboot ve Recovery inceleme, FileVault açma, HFS+ katalog/journal incelemesi ve gerçek Mac üzerinde boot doğrulaması. Sağlanan mimari bu işleri ayırır. Güncel doğrulama kapsamı docs/VALIDATION.md içindedir.
+Açık kapsam: fiziksel klonun Windows kabulü, RAW imajı SSD’ye geri yükleme, ayrıcalıklı yazma yardımcısı, detaylı SMART, APFS volume group/snapshot/Preboot ve Recovery inceleme, FileVault açma, HFS+ katalog/journal incelemesi ve gerçek Mac üzerinde boot doğrulaması. Sağlanan mimari bu işleri ayırır. Güncel doğrulama kapsamı docs/VALIDATION.md içindedir.

@@ -3,8 +3,16 @@ name = "mc-device"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+[features]
+windows-physical-clone = ["dep:getrandom"]
+
 [dependencies]
+getrandom = { version = "0.4", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+tempfile.workspace = true
+windows-sys = { version = "0.61", features = ["Win32_Storage_Vhd", "Win32_Security"] }

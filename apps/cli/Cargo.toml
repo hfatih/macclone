@@ -3,6 +3,9 @@ name = "macclone"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+[features]
+windows-physical-clone = ["mc-engine/windows-physical-clone", "dep:windows-sys"]
+
 [dependencies]
 mc-engine.workspace = true
 mc-device.workspace = true
@@ -10,3 +13,7 @@ mc-inspect.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"], optional = true }

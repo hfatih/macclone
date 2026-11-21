@@ -78,7 +78,7 @@ Uygulanmış sınırlar ve komutlar README dosyasında yer alır. Buradaki fizik
 
 ## Fiziksel hedef için uygulanacak protokol
 
-Bu bölüm sonraki kilometre taşının uygulama sözleşmesidir. Şu anki CLI ve Tauri yalnızca plan döndürür.
+İsteğe bağlı Windows CLI, fiziksel aktarım protokolünün ilk uygulamasıdır. Operatör modeli, seriyi, kimliği ve kapasiteyi görür. Rastgele onay kodu beş dakika içinde tek kullanımlık plana bağlanır. Plan yeniden doğrulanır ve günlük dosyalarının bulunduğu volume'un bütün disk aralıkları kaynak/hedef ile karşılaştırılır. Ham tanıtıcılar açıkken disk numarası, uzunluk, bağlantı türü, seri, hizalama ve çevrimdışı durum sorgulanır. Kopyalama aynı günlüğü, flush sırasını ve geri okumayı kullanır. Aday CLI yönetici PowerShell oturumunda çalışır. Tauri salt okunur plan sunar. GUI için ayrıcalıklı yardımcı ve yönetici oturumuyla Windows kabulü ayrı aşamalardır.
 
 1. **Envanter.** Disk numarası, PnP/aygıt kimliği, seri, bus, model ve geometri ayrı alanlardır. `MSFT_Disk.IsBoot` ve `IsSystem` iki ayrı girdidir. Windows dizini, sistem/EFI, sayfa dosyaları, dump ve günlük/imajı barındıran volume'lar fiziksel extent kümelerine çözülür. Her korunmuş volume'un tüm extent'leri kapsanır. GUID, sürücü harfi veya tek extent varsayımı yapılamaz.
 2. **Salt okunur plan.** Plan kimlikleri, topoloji nesli, imaj/map host diski, kaynak/hedef sektör boyları, kapsam, ayar ve plan nonce'unu bağlar. Planın önerdiği hedef ve kapasite bayt cinsinden gösterilir. Model/seri eksikliği, yinelenen USB seri numarası veya eşlenemeyen bir volume varsa yürütme hakkı oluşmaz. Partition-only aktarım, tüm diski doğrulama politikasıyla aynı komut olmayacaktır.

@@ -157,7 +157,11 @@ fn open_disk(_: u32, _: &str, _: bool) -> io::Result<Source> {
 }
 
 mod topology;
+#[cfg(all(windows, feature = "windows-physical-clone"))]
+pub use topology::approval::{ApprovedClone, PreparedClone};
 pub use topology::{ClonePlan, TopologyIssue, plan_disks};
+#[cfg(all(windows, feature = "windows-physical-clone"))]
+pub use win::PhysicalTarget;
 
 fn plan(source: &Disk, target: &Disk) -> Vec<String> {
     let mut reasons = Vec::new();
@@ -184,6 +188,7 @@ fn plan(source: &Disk, target: &Disk) -> Vec<String> {
         }
         if geometry(d.bytes, d.logical).is_err()
             || !d.physical.is_power_of_two()
+            || d.physical > 4096
             || d.physical < d.logical
             || !d.bytes.is_multiple_of(d.physical.max(1) as u64)
         {

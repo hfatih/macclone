@@ -29,4 +29,9 @@ GitLab issue şablonu `.gitlab/issue_templates/Fiziksel-klon-01.md` doğrudan uy
 
 ## Kaynak paketini projeye aktarma
 
-`MacClone-gitlab.bundle` `main` başlangıç dalını ve ilk değişikliğin `feat/windows-volume-extents` dalını içerir. Yeni ve boş GitLab projesi için yerelde `git clone -b main MacClone-gitlab.bundle macclone` ile başlayıp origin adresini kendi GitLab projenize ayarlayabilirsiniz. Var olan bir projeye aktarımda normal bir dal ve merge request kullanın. ZIP kullanılıyorsa arşiv içindeki `macclone` klasörünün içeriği, gizli `.gitlab` dizini ve `.gitlab-ci.yml` dahil GitLab deposunun köküne yerleştirilir.
+`MacClone-gitlab.bundle` `main` başlangıç dalını ve ilk değişikliğin `feat/windows-volume-extents` dalını ve sonraki `feat/verified-physical-clone` dalını içerir. Yeni ve boş GitLab projesi için yerelde `git clone -b main MacClone-gitlab.bundle macclone` ile başlayıp origin adresini kendi GitLab projenize ayarlayabilirsiniz. Var olan bir projeye aktarımda normal bir dal ve merge request kullanın. ZIP kullanılıyorsa arşiv içindeki `macclone` klasörünün içeriği, gizli `.gitlab` dizini ve `.gitlab-ci.yml` dahil GitLab deposunun köküne yerleştirilir.
+
+
+## Fiziksel klon dalının durumu
+
+`feat/verified-physical-clone` dalı volume denetiminin üstüne hedef onayı, günlük diskini kontrol eden Windows oturumu, varsayılan olarak kapalı HDD → SSD CLI ve ortak SHA-256 geri okumasını ekler. `MACCLONE_WINDOWS_VHDX_RUNNER_TAG` geçici VHDX kabulü için izole, yükseltilmiş Windows runner etiketine ayarlanırsa `windows-vhdx-acceptance` işi elle başlatılabilir. Test kendi oluşturduğu VHDX dışında aygıt yolu almaz. Gerçek Windows sonucu yayın kabul kaydına ayrıca yazılmalıdır.

@@ -104,7 +104,7 @@ fn volumes() -> io::Result<Vec<String>> {
     }
 }
 
-fn disk_extents(volume: &str) -> io::Result<Vec<extents::Extent>> {
+pub(in crate::topology) fn disk_extents(volume: &str) -> io::Result<Vec<extents::Extent>> {
     // CreateFile requires the GUID without its final separator for a volume handle.
     let file = OpenOptions::new()
         .access_mode(0)
@@ -189,7 +189,6 @@ fn local_storage_path(raw: &str, windows: &str) -> io::Result<PathBuf> {
 }
 
 fn volume_for_path(path: &Path, allow_missing: bool) -> io::Result<String> {
-    let mut buffer = vec![0u16; 32768];
     for candidate in path.ancestors() {
         // Resolve junctions through the actual open handle. A dump file may not exist yet.
         let file = match OpenOptions::new()
@@ -219,24 +218,29 @@ fn volume_for_path(path: &Path, allow_missing: bool) -> io::Result<String> {
             }
             Err(error) => return Err(error),
         };
-        // SAFETY: file owns the handle and the output buffer is writable.
-        let len = unsafe {
-            GetFinalPathNameByHandleW(
-                file.as_raw_handle(),
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-                VOLUME_NAME_GUID,
-            )
-        } as usize;
-        if len == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if len >= buffer.len() {
-            return Err(crate::invalid("Resolved volume path is too long"));
-        }
-        return volume_guid(&String::from_utf16(&buffer[..len]).map_err(io::Error::other)?);
+        return volume_for_handle(&file);
     }
     Err(crate::invalid("No existing local storage ancestor"))
+}
+
+fn volume_for_handle(file: &fs::File) -> io::Result<String> {
+    let mut buffer = vec![0u16; 32768];
+    // SAFETY: file owns the handle and the output buffer is writable.
+    let len = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            VOLUME_NAME_GUID,
+        )
+    } as usize;
+    if len == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if len >= buffer.len() {
+        return Err(crate::invalid("Resolved volume path is too long"));
+    }
+    volume_guid(&String::from_utf16(&buffer[..len]).map_err(io::Error::other)?)
 }
 
 fn place(
@@ -289,7 +293,7 @@ pub(super) fn observe(disks: &[Disk]) -> Topology {
             disks: system_disks,
         });
     }
-    let mut volume_disks = BTreeMap::new();
+    let mut volume_disks = BTreeMap::<String, Vec<u32>>::new();
     let volume_names = volumes();
     match volume_names {
         Ok(names) => {
@@ -332,6 +336,10 @@ pub(super) fn observe(disks: &[Disk]) -> Topology {
         ),
     }
 
+    topology.attached = volume_disks
+        .iter()
+        .map(|(guid, numbers)| (guid.clone(), numbers.clone()))
+        .collect();
     let windows = match windows_directory() {
         Ok(path) => path,
         Err(error) => {
@@ -366,4 +374,31 @@ pub(super) fn observe(disks: &[Disk]) -> Topology {
         place(topology, &volume_disks, role, path, &windows);
     });
     topology
+}
+
+#[cfg(feature = "windows-physical-clone")]
+pub(in crate::topology) fn journal_disks(file: &fs::File) -> io::Result<Vec<u32>> {
+    Ok(disk_extents(&volume_for_handle(file)?)?
+        .into_iter()
+        .map(|extent| extent.disk)
+        .collect())
+}
+
+#[cfg(feature = "windows-physical-clone")]
+pub(in crate::topology) fn hold_directory(path: &Path) -> io::Result<fs::File> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(crate::invalid(
+            "Journal directory must be a local, non-reparse directory",
+        ));
+    }
+    let file = OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    if !file.metadata()?.is_dir() {
+        return Err(crate::invalid("Expected a journal directory handle"));
+    }
+    Ok(file)
 }

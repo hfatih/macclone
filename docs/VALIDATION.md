@@ -43,3 +43,11 @@ cargo build --target x86_64-pc-windows-gnu -p macclone -p macclone-desktop --fea
 ```
 
 Windows x64 çapraz derleme ve Clippy geçti. Masaüstü için `npm run lint` ve `npm run build` geçti. Chromium üzerinde sentetik Tauri yanıtıyla hedef diskin engel gerekçesi, seçilen disk kimliklerinin gönderilmesi ve seçim değişince eski sonucun temizlenmesi doğrulandı. Win32 ve PowerShell sorgularının etkin pagefile, EFI ve dinamik volume ile gerçek Windows üzerindeki çalışması yerel Windows kabulünde doğrulanacak.
+
+## Fiziksel klon geliştirme adayı
+
+- Linux üzerinde `cargo test --locked --features windows-physical-clone` ile **45 Rust testi** geçti. Yeni vakalar arasında süresi dolmuş veya yanlış aygıt onayı, sonradan beliren bağlı volume, günlük diski çakışması, yarım hedef yazımı, yanlış aygıtla devam denemesi ve geri okumada içerik uyuşmazlığı var.
+- `scripts/smoke.py`, 512 ve 4096 bayt sektörlü GPT imajlarında önceki RAW yolunu ve sabit `partition-manager` sürümüne karşı byte eşitliğini tekrar doğruladı.
+- Windows x64 GNU hedefi için aday CLI derlendi. Windows cihaz ve CLI kodu Clippy denetiminden geçti. VHDX kabul testi Windows x64 test ikilisine bağlandı. GitLab YAML şeması doğrulandı.
+- VHDX testi Windows üzerinde **yürütülmedi**. İzole Windows testinde her sektör boyu için iki yeni, geçici VHDX oluşturulur. Ham kaynak tanıtıcısı okuma hakkıyla yeniden açılır. Hedefe aktarım ve flush sonrasında hedef başka bir tanıtıcıyla yeniden okunup tüm byte aralıkları karşılaştırılır. Test, işletim sisteminin kendi oluşturduğu VHDX için döndürdüğü aygıt yolunu kullanır. Normal test koşusunda bu kabul testi atlanır.
+- Bu ortamda gerçek HDD/SSD yazımı, Windows GUI'den yetkili yardımcı, fiziksel USB/SATA bağlantı kaybı ve macOS açılışı denenmedi. Çevrimdışı ham diske erişim sürücüye ve Windows depolama politikasına bağlıdır. Aday CLI herhangi bir yazma yapmadan önce gerekli Win32 sorgusu ya da erişim başarısızlığını hata döndürür.

@@ -106,7 +106,7 @@ fn property(f: &File, id: i32) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn bind_handle(file: &File, d: &Disk) -> io::Result<()> {
+fn bind_handle(file: &File, d: &Disk, check_bus: bool) -> io::Result<()> {
     let alignment = property(file, StorageAccessAlignmentProperty)?;
     if alignment.len() < 28
         || u32::from_le_bytes(alignment[16..20].try_into().unwrap()) != d.logical
@@ -120,6 +120,27 @@ fn bind_handle(file: &File, d: &Disk) -> io::Result<()> {
     let descriptor = property(file, StorageDeviceProperty)?;
     if descriptor.len() < 28 {
         return Err(invalid("Missing device descriptor"));
+    }
+    if check_bus {
+        use windows_sys::Win32::Storage::FileSystem::{
+            BusTypeAta as BUS_ATA, BusTypeNvme as BUS_NVME, BusTypeSata as BUS_SATA,
+            BusTypeUsb as BUS_USB,
+        };
+        let reported = descriptor
+            .get(28..32)
+            .map(|bytes| i32::from_le_bytes(bytes.try_into().unwrap()));
+        let matches_inventory = matches!(
+            (reported, d.bus.to_ascii_uppercase().as_str()),
+            (Some(BUS_ATA), "ATA")
+                | (Some(BUS_NVME), "NVME")
+                | (Some(BUS_SATA), "SATA")
+                | (Some(BUS_USB), "USB")
+        );
+        if !matches_inventory {
+            return Err(invalid(
+                "Raw handle transport does not match the approved inventory",
+            ));
+        }
     }
     let at = u32::from_le_bytes(descriptor[24..28].try_into().unwrap()) as usize;
     let serial = descriptor
@@ -166,7 +187,7 @@ pub(super) fn open_disk(number: u32, id: &str, consistent: bool) -> io::Result<S
         .open(path)?;
     let len = u64::from_le_bytes(query(&file, IOCTL_DISK_GET_LENGTH_INFO)?);
     if consistent {
-        bind_handle(&file, &d)?;
+        bind_handle(&file, &d, false)?;
     }
     let dev = query::<12>(&file, IOCTL_STORAGE_GET_DEVICE_NUMBER)?;
     if u32::from_le_bytes(dev[4..8].try_into().unwrap()) != number
@@ -192,6 +213,8 @@ pub(super) fn open_disk(number: u32, id: &str, consistent: bool) -> io::Result<S
         reader: Box::new(SectorReader {
             file,
             pos: 0,
+            #[cfg(feature = "windows-physical-clone")]
+            require_offline: false,
             len,
             sector: d.logical as usize,
             buf: Aligned([0u8; 65536]),
@@ -208,12 +231,18 @@ struct SectorReader {
     pos: u64,
     len: u64,
     sector: usize,
+    #[cfg(feature = "windows-physical-clone")]
+    require_offline: bool,
 }
 impl Read for SectorReader {
     fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
         let max = (self.len - self.pos).min(b.len() as u64) as usize;
         if max == 0 {
             return Ok(0);
+        }
+        #[cfg(feature = "windows-physical-clone")]
+        if self.require_offline {
+            raw_disk_attributes(&self.file, false)?;
         }
         let sector = self.sector as u64;
         let base = self.pos / self.sector as u64 * sector;
@@ -241,3 +270,172 @@ impl Seek for SectorReader {
         Ok(self.pos)
     }
 }
+
+#[cfg(feature = "windows-physical-clone")]
+fn raw_disk_attributes(file: &File, writable: bool) -> io::Result<()> {
+    use windows_sys::Win32::System::Ioctl::{
+        DISK_ATTRIBUTE_OFFLINE, DISK_ATTRIBUTE_READ_ONLY, GET_DISK_ATTRIBUTES,
+        IOCTL_DISK_GET_DISK_ATTRIBUTES,
+    };
+    const SIZE: usize = std::mem::size_of::<GET_DISK_ATTRIBUTES>();
+    let bytes = query::<SIZE>(file, IOCTL_DISK_GET_DISK_ATTRIBUTES)?;
+    let version = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+    let attributes = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    if version != SIZE
+        || attributes & DISK_ATTRIBUTE_OFFLINE == 0
+        || (writable && attributes & DISK_ATTRIBUTE_READ_ONLY != 0)
+    {
+        return Err(invalid(
+            "Clone device is no longer in its approved offline state",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "windows-physical-clone")]
+fn confirmed_raw_handle(disk: &Disk, writable: bool) -> io::Result<SectorReader> {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_DEVICE_DISK, FILE_FLAG_WRITE_THROUGH};
+    let mut options = OpenOptions::new();
+    options.read(true).write(writable).share_mode(0);
+    if writable {
+        options.custom_flags(FILE_FLAG_WRITE_THROUGH);
+    }
+    let path = format!(r"\\.\PhysicalDrive{}", disk.number);
+    let file = options.open(path)?;
+    let number = query::<12>(&file, IOCTL_STORAGE_GET_DEVICE_NUMBER)?;
+    if u32::from_le_bytes(number[..4].try_into().unwrap()) != FILE_DEVICE_DISK
+        || u32::from_le_bytes(number[4..8].try_into().unwrap()) != disk.number
+        || u64::from_le_bytes(query(&file, IOCTL_DISK_GET_LENGTH_INFO)?) != disk.bytes
+    {
+        return Err(invalid("Raw device size or disk number changed"));
+    }
+    bind_handle(&file, disk, true)?;
+    raw_disk_attributes(&file, writable)?;
+    Ok(SectorReader {
+        buf: Aligned([0; 65536]),
+        file,
+        pos: 0,
+        len: disk.bytes,
+        sector: disk.logical as usize,
+        require_offline: true,
+    })
+}
+
+#[cfg(feature = "windows-physical-clone")]
+fn disk_identity(disk: &Disk) -> io::Result<String> {
+    // JSON framing avoids collisions between model, ID and serial delimiters.
+    Ok(format!(
+        "physical:{}",
+        serde_json::to_string(&(
+            &disk.id,
+            &disk.serial,
+            &disk.model,
+            &disk.bus,
+            disk.bytes,
+            disk.logical,
+            disk.physical,
+        ))?
+    ))
+}
+
+#[cfg(feature = "windows-physical-clone")]
+pub(super) fn open_clone_handles(
+    source: &Disk,
+    target: &Disk,
+) -> io::Result<(Source, PhysicalTarget)> {
+    let source_reader = confirmed_raw_handle(source, false)?;
+    let target_writer = confirmed_raw_handle(target, true)?;
+    Ok((
+        Source {
+            reader: Box::new(source_reader),
+            stamp: Stamp {
+                identity: disk_identity(source)?,
+                bytes: source.bytes,
+                sector: source.logical,
+                modified_ns: None,
+            },
+            backing_file: None,
+        },
+        PhysicalTarget {
+            disk: target_writer,
+            identity: disk_identity(target)?,
+            alignment: target.physical as usize,
+        },
+    ))
+}
+
+#[cfg(feature = "windows-physical-clone")]
+pub struct PhysicalTarget {
+    disk: SectorReader,
+    identity: String,
+    alignment: usize,
+}
+
+#[cfg(feature = "windows-physical-clone")]
+impl PhysicalTarget {
+    pub fn identity(&self) -> &str {
+        &self.identity
+    }
+    pub fn capacity(&self) -> u64 {
+        self.disk.len
+    }
+    pub fn reported_length(&self) -> io::Result<u64> {
+        Ok(u64::from_le_bytes(query(
+            &self.disk.file,
+            IOCTL_DISK_GET_LENGTH_INFO,
+        )?))
+    }
+    pub fn assert_writable_offline(&self) -> io::Result<()> {
+        raw_disk_attributes(&self.disk.file, true)
+    }
+    pub fn sync(&self) -> io::Result<()> {
+        self.disk.file.sync_all()?;
+        self.assert_writable_offline()
+    }
+}
+
+#[cfg(feature = "windows-physical-clone")]
+impl Read for PhysicalTarget {
+    fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+        self.disk.read(b)
+    }
+}
+
+#[cfg(feature = "windows-physical-clone")]
+impl Seek for PhysicalTarget {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.disk.seek(position)
+    }
+}
+
+#[cfg(feature = "windows-physical-clone")]
+impl std::io::Write for PhysicalTarget {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if !self.disk.pos.is_multiple_of(self.alignment as u64)
+            || !bytes.len().is_multiple_of(self.alignment)
+            || bytes.len() as u64 > self.disk.len - self.disk.pos
+        {
+            return Err(invalid("Physical write is unaligned or outside the disk"));
+        }
+        self.assert_writable_offline()?;
+        let count = bytes.len().min(self.disk.buf.0.len());
+        self.disk.file.seek(SeekFrom::Start(self.disk.pos))?;
+        self.disk.buf.0[..count].copy_from_slice(&bytes[..count]);
+        // A short write error leaves the checkpoint uncommitted for a retry.
+        if self.disk.file.write(&self.disk.buf.0[..count])? != count {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "Partial physical disk write",
+            ));
+        }
+        self.disk.pos += count as u64;
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.sync()
+    }
+}
+
+#[cfg(all(test, feature = "windows-physical-clone"))]
+mod vhdx_test;

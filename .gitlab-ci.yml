@@ -17,7 +17,7 @@ core-and-reference:
     - rustup component add rustfmt clippy
     - cargo fmt --all -- --check
     - cargo clippy --locked --all-targets -- -D warnings
-    - cargo test --locked
+    - cargo test --locked --features windows-physical-clone
     - cargo build --locked -p macclone --target-dir target
     - git init -q reference/partition-manager
     - git -C reference/partition-manager fetch -q --depth=1 https://github.com/inalto/partition-manager.git 1d6c43f69c198b5978c19e0d2b5722d28d138938
@@ -47,9 +47,10 @@ windows-package:
     - if: '$MACCLONE_WINDOWS_RUNNER_TAG'
   script:
     - rustc -Vv
-    - cargo test --locked
+    - cargo test --locked --features windows-physical-clone
     - cargo build --locked -p macclone --target-dir target
     - python scripts/smoke.py target/debug/macclone.exe
+    - cargo clippy --locked -p macclone -p mc-device --features windows-physical-clone --all-targets -- -D warnings
     - cd apps/desktop
     - npm ci --no-audit --no-fund
     - npm run build
@@ -61,3 +62,14 @@ windows-package:
     paths:
       - target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
     expire_in: 14 days
+
+windows-vhdx-acceptance:
+  stage: test
+  tags:
+    - '$MACCLONE_WINDOWS_VHDX_RUNNER_TAG'
+  rules:
+    - if: '$MACCLONE_WINDOWS_VHDX_RUNNER_TAG'
+      when: manual
+      allow_failure: true
+  script:
+    - cargo test --locked -p mc-device --features windows-physical-clone disposable_vhdx_raw_roundtrip -- --ignored --nocapture

@@ -3,6 +3,9 @@ name = "mc-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+[features]
+windows-physical-clone = ["mc-device/windows-physical-clone"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
