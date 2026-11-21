@@ -1,10 +1,23 @@
-# MacClone
+<div align="center">
+  <img src="apps/desktop/src-tauri/icons/icon.png" width="112" height="112" alt="MacClone logosu">
+  <h1>MacClone</h1>
+  <p>Windows için macOS disk klonlama, RAW imaj ve doğrulama aracı.</p>
+  <p><strong>Starlit Studios tarafından geliştirilmiştir.</strong></p>
+  <p><a href="#klonlama-uyumluluğu">Uyumluluk</a> · <a href="#windowsta-derleme-ve-başlatma">Derleme</a> · <a href="docs/VALIDATION.md">Testler</a> · <a href="LICENSE">MIT lisansı</a></p>
+</div>
 
-Windows 10/11 x64 için Rust, Tauri 2 ve Vue 3 tabanlı disk inceleme, RAW imaj alma ve kurtarma uygulaması. Standart derleme RAW imaj ve fiziksel klon planı sunar. HDD → SSD aktarımı Windows x64 geliştirme CLI'sinde yer alır ve Windows kabul testine tabidir.
+MacClone, HDD ve SSD arasında her iki yönde çalışacak şekilde tasarlandı. Windows masaüstü sürümü diskleri inceler, klon planını denetler ve RAW imaj çıkarır. Fiziksel yazma, Windows kabulü tamamlanana kadar isteğe bağlı geliştirme CLI'sindedir.
 
-Tam disk kopyasında teknik referansımız MIT lisanslı `inalto/partition-manager` v0.4.1’dir. İki motorun çıktısı, aralarında veri bulunan GPT bölümleriyle otomatik olarak karşılaştırılır. Seçilen komut ve commit `docs/ARCHITECTURE.md`, tekrarlanabilir deney `docs/VALIDATION.md` içindedir.
+## Klonlama uyumluluğu
 
-GitLab geliştirme sırası ve 6.2 Sol için ilk görev [GitLab planında](docs/GITLAB-PLAN.md) yer alır.
+| Kaynak ve hedef | Sonuç |
+|---|---|
+| HDD → SSD veya SSD → HDD, eşit kapasite ve aynı mantıksal sektör boyu | EFI, GPT, APFS/HFS+ ve ayrılmamış alanlar dahil tam disk, bayt bayt kopyalanır. |
+| Kaynak daha küçük, hedef daha büyük, mantıksal sektör boyu eşit | Sağlam GPT için `--relocate-gpt` kullanılır. Koruyucu MBR ve GPT başlıkları güncellenir, yedek tablo son LBA'ya taşınır. Bölüm GUID'leri, sınırları ve içerikleri korunur. Ek alan boş kalır. |
+| Hedef daha küçük veya mantıksal sektör boyu farklı | Plan engellenir. |
+| Büyük hedef, kaynakta hasarlı ya da hibrit GPT | GPT taşıma işlemi reddedilir. Kaynağın kendi boyutunda RAW imaj alınabilir. |
+
+SHA-256, hedefin yeniden okunan içeriğini doğrular. Eşit kapasitede karşılaştırma doğrudan kaynakla yapılır. Büyük hedefte beklenen sonuç, taşınan GPT ve sıfırlanan ek alanla birlikte doğrulanır. macOS'un klondan açılması ayrıca sınanır.
 
 ## Bugün çalışan akışlar
 
@@ -17,9 +30,9 @@ GitLab geliştirme sırası ve 6.2 Sol için ilk görev [GitLab planında](docs/
 | Doğrulama | İmajın tamamı yeniden okunur. İlk okumada elde edilen kaynak akışıyla SHA-256 karşılaştırılır. Eksik dolgulu işin sonucu `partial`; CLI çıkış kodu 2. Tam doğrulama kodu 0, başarısız işlem kodu 1. |
 | Masaüstü | Türkçe arayüzden disk listesi, disk klon planı, imaj/kurtarma başlatma ve devam, inceleme, doğrulama, ilerleme ve iptal. Oturum günlüğü ile kalıcı iş kayıtları ayrıdır. |
 
-## Fiziksel HDD → SSD geliştirme sürümü
+## Fiziksel HDD ve SSD klonu
 
-`windows-physical-clone` Cargo özelliği Windows CLI'ye etkileşimli `clone SOURCE_NUMBER TARGET_NUMBER JOB_DIR [--resume]` komutunu ekler. Varsayılan uygulama sürümü imaj ve salt okunur plan sunar. Aday derleme, yalnızca eşit kapasite ve eşit mantıksal sektör boyuyla çalışır. Kaynak ve hedef çevrimdışı ve bağlı Windows volume'larından ayrı olmalıdır. Günlük dizini üçüncü, erişilebilir bir yerel disk üzerinde olmalıdır. Aynı iş dizininden devam etmek için kaynağı, hedefi ve ayarları koruyun.
+`windows-physical-clone` Cargo özelliği Windows CLI'ye etkileşimli `clone SOURCE_NUMBER TARGET_NUMBER JOB_DIR [--resume] [--relocate-gpt]` komutunu ekler. Varsayılan uygulama sürümü imaj ve salt okunur plan sunar. Eşit mantıksal sektör boyu her iki yönde de gerekir. Büyük hedef için ayrıca `--relocate-gpt` kullanılır. Bu işlem hedefin ek alanını sıfırlar ve dosya sistemini büyütmez. Kaynak ve hedef çevrimdışı ve bağlı Windows volume'larından ayrı olmalıdır. Günlük dizini üçüncü, erişilebilir bir yerel disk üzerinde olmalıdır. Aynı iş dizininden devam etmek için kaynağı, hedefi ve ayarları koruyun.
 
 Windows kabulü için önce izole, yükseltilmiş Windows x64 VM içinde yalnızca testin oluşturduğu VHDX üzerinde aktarım katmanını doğrulayın.
 
@@ -29,7 +42,7 @@ cargo build --locked -p macclone --features windows-physical-clone
 .\target\debug\macclone.exe --help
 ```
 
-Donanım kabulünün ayrıntıları ve aday sürümün sınırları [doğrulama kaydında](docs/VALIDATION.md) yer alır.
+Daha büyük GPT hedefini fiziksel yazma yapmadan modellemek için `macclone image SOURCE.raw JOB_DIR --target-bytes BYTES` kullanın. Hedef uzunluğunu bayt olarak verin. 4096 bayt mantıksal sektörlü RAW dosyası için `--sector 4096` ekleyin. Çıktı bağımsız bir imajdır. [Doğrulama kaydı](docs/VALIDATION.md)
 
 ## Windows'ta derleme ve başlatma
 
@@ -96,6 +109,10 @@ python scripts/smoke.py target/debug/macclone.exe
 - **Bozuk kaynak** · İlk okuma medyayı zorlayabilir. Kurtarma akışı kesin medya hatalarını kaydeder. Burada ddrescue'nun çok geçişli trim/scrape zamanlayıcısı uygulanmadı.
 - **UI kapanırsa** · Yerel süreç sonlanabilir. Yeniden açıp aynı iş klasörüyle devam edin. Arka planda kalıcı Windows servisi kurulmaz.
 - **GPT doğru, Mac açılmıyor** · FileVault anahtarları, SSV ve ilgili Mac'in başlangıç güvenliği ayrı değerlendirilir. Bu sürüm boot testi yapmaz.
+
+## Katkı ve CI
+
+GitHub Actions Linux ve Windows testlerini, sabit `partition-manager` karşılaştırmasını ve Windows NSIS paketlemeyi tanımlar. GitLab CI aynı kaynak ağacında ayrı yapılandırılır. Katkı göndermeden önce test girdisi olarak sentetik imaj kullanın. [Katkı kılavuzu](CONTRIBUTING.md) · [GitLab planı](docs/GITLAB-PLAN.md) · [Mimari](docs/ARCHITECTURE.md)
 
 ## Depo
 

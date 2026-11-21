@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {computed,onMounted,onUnmounted,ref,watch} from 'vue'
 import {listen} from '@tauri-apps/api/event'
+import logo from '../src-tauri/icons/icon.png'
 import {api,type Disk,type Input,type Layout,type Status} from './api'
 const tabs=['Genel bakış','Diskler','Klon planı','Disk imajı','Kurtarma','Dosya sistemi','Doğrulama','Günlük','Ayarlar'] as const
 type Tab=typeof tabs[number]
@@ -33,6 +34,18 @@ async function start(){if(!subject.value)return;const input=subject.value;await 
  else await api.image(input,directory.value,block.value,page.value==='Kurtarma',resume.value)
  apply(await api.status())
 })}
+const selectedTarget=computed(()=>disks.value.find(d=>d.number===target.value))
+const layoutMode=computed(()=>{
+ if(!disk.value||!selectedTarget.value)return undefined
+ if(disk.value.bytes>selectedTarget.value.bytes)return 'smaller'
+ if(disk.value.logical!==selectedTarget.value.logical)return 'sector'
+ return disk.value.bytes===selectedTarget.value.bytes?'exact':'gpt'
+})
+function reverseDirection(){
+ const source=selected.value
+ selected.value=target.value
+ target.value=source
+}
 const planChecked=ref(false)
 async function plan(){
  const source=disks.value.find(d=>d.number===selected.value)
@@ -55,7 +68,7 @@ onUnmounted(()=>{unlisten?.();clearInterval(timer)})
 </script>
 <template>
 <div class="shell">
- <aside><div class="brand"><span class="mark">M</span> MacClone</div><nav><button v-for="t in tabs" :key="t" :class="{active:page===t}" @click="page=t">{{t}}</button></nav><small>MacClone · 0.1.0</small></aside>
+ <aside><div class="brand"><img class="mark" :src="logo" alt=""> MacClone</div><nav><button v-for="t in tabs" :key="t" :class="{active:page===t}" @click="page=t">{{t}}</button></nav><small>Starlit Studios tarafından geliştirilmiştir</small></aside>
  <main><header><h1>{{page}}</h1><button v-if="page==='Genel bakış'||page==='Diskler'" @click="refresh">Diskleri yenile</button></header>
  <p v-if="error" role="alert" class="notice">{{error}}</p>
  <template v-if="page==='Genel bakış'||page==='Diskler'">
@@ -65,10 +78,17 @@ onUnmounted(()=>{unlisten?.();clearInterval(timer)})
  <article v-for="d in disks" :key="d.number"><div><h3>{{d.model}} <small>Disk {{d.number}}</small></h3><p>{{fmt(d.bytes)}} · {{d.bus}} · {{d.health||'Sağlık bilinmiyor'}}</p>
  <p>Seri {{d.serial||'bilinmiyor'}} · Sektör {{d.logical}} / {{d.physical}} B · Salt okunur {{seen(d.readonly)}}</p><p>Sistem {{seen(d.system)}} · Önyükleme {{seen(d.boot)}} · Çevrimdışı {{seen(d.offline)}}</p></div><button :disabled="!d.id" @click="inspectDisk(d)">İncele</button></article>
  </section><div class="actions"><button class="primary" @click="page='Disk imajı'">RAW imaj al</button><button @click="page='Klon planı'">Klon planı oluştur</button></div></template>
- <section v-if="page==='Klon planı'"><h2>Fiziksel disk uyumluluğu</h2><p>Plan hiçbir bayt yazmaz. Bu sürüm kaynak diski yeni bir RAW imaj dosyasına aktarabilir.</p>
+ <section v-if="page==='Klon planı'"><h2>Fiziksel disk uyumluluğu</h2><p>HDD → SSD ve SSD → HDD için kaynak ve hedefi seçin. Bu ekran salt okunur klon planı oluşturur.</p>
  <label>Kaynak disk<select v-model="selected"><option :value="null">Disk seçin</option><option v-for="d in disks" :key="d.number" :value="d.number">{{d.number}} · {{d.model}} · {{d.serial}} · {{fmt(d.bytes)}}</option></select></label>
  <label>Hedef disk<select v-model="target"><option :value="null">Disk seçin</option><option v-for="d in disks" :key="d.number" :value="d.number">{{d.number}} · {{d.model}} · {{d.serial}} · {{fmt(d.bytes)}}</option></select></label>
- <button class="primary" :disabled="busy||selected===null||target===null" @click="plan">Planı denetle</button><p v-if="planChecked&&!reasons.length">Uyumluluk denetimi engel bulmadı.</p><ul v-if="reasons.length" aria-live="polite"><li v-for="reason in reasons" :key="reason">{{reason}}</li></ul></section>
+ <div class="actions">
+ <button class="primary" :disabled="busy||selected===null||target===null" @click="plan">Planı denetle</button>
+ <button :disabled="busy||selected===null||target===null||selected===target" @click="reverseDirection">Kaynak ve hedefi değiştir</button>
+ </div>
+ <p v-if="layoutMode==='gpt'">Daha büyük hedefte sağlam bir GPT ve açık GPT taşıma onayı gerekir. Bölüm sınırları korunur.</p>
+ <p v-else-if="layoutMode==='exact'">Kapasiteler eşit. Plan tam disk kopyasını denetler.</p>
+ <p v-else-if="layoutMode==='smaller'" class="notice">Hedef, kaynak diskin tüm sektörlerini alamayacak kadar küçük.</p>
+ <p v-else-if="layoutMode==='sector'" class="notice">Mantıksal sektör boyları farklı.</p><p v-if="planChecked&&!reasons.length">Uyumluluk denetimi engel bulmadı.</p><ul v-if="reasons.length" aria-live="polite"><li v-for="reason in reasons" :key="reason">{{reason}}</li></ul></section>
  <template v-if="sourcePages.includes(page)"><section>
  <h2>Kaynak</h2><div class="seg"><button :class="{chosen:mode==='image'}" @click="mode='image'">İmaj dosyası</button><button :class="{chosen:mode==='disk'}" @click="mode='disk'">Fiziksel disk</button></div>
  <label v-if="mode==='image'">RAW dosyasının tam yolu<input v-model="path" placeholder="D:\Arşiv\Mac.raw" spellcheck="false"></label>

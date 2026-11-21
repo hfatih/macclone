@@ -58,9 +58,24 @@ pub struct PreparedClone {
 
 #[cfg(windows)]
 impl PreparedClone {
-    pub fn new(source: u32, target: u32, job: &Path) -> io::Result<Self> {
+    pub fn new(
+        source: u32,
+        target: u32,
+        job: &Path,
+        layout: super::CloneLayout,
+    ) -> io::Result<Self> {
         let plan = super::plan_disks(source, target)?;
         eligible(&plan)?;
+        if plan.layout != layout {
+            return Err(invalid(match plan.layout {
+                super::CloneLayout::Exact => {
+                    "Equal-capacity disks require exact cloning without --relocate-gpt"
+                }
+                super::CloneLayout::RelocateGpt => {
+                    "Larger destination requires explicit --relocate-gpt"
+                }
+            }));
+        }
         let name = job
             .file_name()
             .ok_or_else(|| invalid("Missing journal name"))?;
@@ -197,6 +212,7 @@ mod tests {
 
     fn plan() -> ClonePlan {
         ClonePlan {
+            layout: super::super::CloneLayout::Exact,
             source: disk(1),
             target: disk(2),
             blockers: vec![],

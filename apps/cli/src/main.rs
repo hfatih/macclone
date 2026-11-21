@@ -1,7 +1,7 @@
 use mc_device::{Input, invalid, open_source};
 use mc_engine::Options;
 use std::{env, io, path::Path, sync::atomic::AtomicBool};
-const USAGE: &str = "macclone list | inspect SOURCE | plan SOURCE_NUMBER TARGET_NUMBER | dry-run SOURCE | image SOURCE NEW_JOB_DIR [--recover] [--resume] [--block BYTES] | verify SOURCE SHA256\nSOURCE: image file path or disk:NUMBER:UNIQUE_ID. Use --sector 4096 for a 4Kn image. Keep recovery/block/sector settings identical on resume.";
+const USAGE: &str = "macclone list | inspect SOURCE | plan SOURCE_NUMBER TARGET_NUMBER | dry-run SOURCE | image SOURCE NEW_JOB_DIR [--recover] [--resume] [--block BYTES] [--target-bytes BYTES] | verify SOURCE SHA256\nSOURCE: image file path or disk:NUMBER:UNIQUE_ID. Use --sector 4096 for a 4Kn image. Keep recovery/block/sector settings identical on resume.";
 fn result() -> io::Result<serde_json::Value> {
     #[cfg(all(windows, feature = "windows-physical-clone"))]
     if env::args().nth(1).as_deref() == Some("clone") {
@@ -11,6 +11,7 @@ fn result() -> io::Result<serde_json::Value> {
     let mut sector = 512;
     let mut options = Options::default();
     let mut resume = false;
+    let mut target_bytes = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -26,6 +27,14 @@ fn result() -> io::Result<serde_json::Value> {
                     options.block = value
                 }
             }
+            "--target-bytes" if target_bytes.is_none() => {
+                args.remove(i);
+                if i >= args.len() {
+                    return Err(invalid(USAGE));
+                }
+                target_bytes = Some(args.remove(i).parse::<u64>().map_err(invalid_number)?);
+            }
+            "--target-bytes" => return Err(invalid("Duplicate --target-bytes")),
             "--recover" => {
                 options.recovery = true;
                 args.remove(i);
@@ -36,6 +45,9 @@ fn result() -> io::Result<serde_json::Value> {
             }
             _ => i += 1,
         }
+    }
+    if target_bytes.is_some() && args.first().map(String::as_str) != Some("image") {
+        return Err(invalid("--target-bytes is only supported by image"));
     }
     let src = |s: &str| -> io::Result<Input> {
         if let Some(d) = s.strip_prefix("disk:") {
@@ -82,12 +94,20 @@ fn result() -> io::Result<serde_json::Value> {
         }
         ["image", s, d] => {
             let mut last = std::time::Instant::now();
-            let r = mc_engine::run(&src(s)?, Path::new(d), options, resume, &cancel, |p| {
+            let progress = |p: mc_engine::Progress| {
                 if last.elapsed().as_secs() >= 1 {
                     eprintln!("{} {}/{} bytes", p.phase, p.bytes, p.total);
                     last = std::time::Instant::now()
                 }
-            })?;
+            };
+            let input = src(s)?;
+            let dir = Path::new(d);
+            let r = match target_bytes {
+                Some(bytes) => {
+                    mc_engine::run_relocated(&input, dir, bytes, options, resume, &cancel, progress)
+                }
+                None => mc_engine::run(&input, dir, options, resume, &cancel, progress),
+            }?;
             Ok(serde_json::to_value(r)?)
         }
         ["verify", s, digest] => Ok(
@@ -106,7 +126,7 @@ fn main() {
     if env::args().nth(1).as_deref() == Some("--help") {
         println!("{USAGE}");
         #[cfg(all(windows, feature = "windows-physical-clone"))]
-        println!("macclone clone SOURCE_NUMBER TARGET_NUMBER JOB_DIR [--resume]");
+        println!("macclone clone SOURCE_NUMBER TARGET_NUMBER JOB_DIR [--resume] [--relocate-gpt]");
         return;
     }
     match result() {
@@ -127,25 +147,36 @@ fn main() {
 fn raw_clone() -> io::Result<serde_json::Value> {
     use std::io::{BufRead, IsTerminal, Write};
     let args = env::args().skip(2).collect::<Vec<_>>();
-    let (selection, resume) = match args.as_slice() {
-        [a, b, dir] => ((a, b, dir), false),
-        [a, b, dir, flag] if flag == "--resume" => ((a, b, dir), true),
-        _ => {
-            return Err(invalid(
-                "Usage: macclone clone SOURCE_NUMBER TARGET_NUMBER JOB_DIR [--resume]",
-            ));
-        }
+    let [source, target, job, flags @ ..] = args.as_slice() else {
+        return Err(invalid(
+            "Usage: macclone clone SOURCE_NUMBER TARGET_NUMBER JOB_DIR [--resume] [--relocate-gpt]",
+        ));
     };
+    let mut resume = false;
+    let mut layout = mc_device::CloneLayout::Exact;
+    for flag in flags {
+        match flag.as_str() {
+            "--resume" if !resume => resume = true,
+            "--relocate-gpt" if layout == mc_device::CloneLayout::Exact => {
+                layout = mc_device::CloneLayout::RelocateGpt
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "Unknown or duplicate clone option: {flag}"
+                )));
+            }
+        }
+    }
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
         return Err(invalid(
             "Physical disk confirmation requires an interactive console",
         ));
     }
-    let (source, target, job) = selection;
     let prepared = mc_device::PreparedClone::new(
         source.parse().map_err(invalid_number)?,
         target.parse().map_err(invalid_number)?,
         Path::new(job),
+        layout,
     )?;
     let plan = prepared.plan();
     let disk_description = |disk: &mc_device::Disk| {
@@ -163,6 +194,11 @@ fn raw_clone() -> io::Result<serde_json::Value> {
     eprintln!("Source      {}", disk_description(&plan.source));
     eprintln!("Destination {}", disk_description(&plan.target));
     eprintln!("Journal {job:?}");
+    if layout == mc_device::CloneLayout::RelocateGpt {
+        eprintln!(
+            "Layout: relocate the backup GPT to the end of the destination and clear the added space. Partition boundaries are preserved."
+        );
+    }
     eprintln!("All sectors of the destination will be overwritten. Type exactly:");
     eprintln!("{}", prepared.confirmation());
     io::stderr().flush()?;

@@ -1,6 +1,6 @@
 # GitLab geliştirme planı
 
-MacClone'un başlangıç noktası çalışan RAW imaj motorudur. Hedef, sağlıklı bir Mac HDD'nin bütün adreslenebilir sektörlerini aynı mantıksal sektör boyuna ve kapasiteye sahip bir SSD'ye güvenle aktarmaktır. Büyük SSD'de GPT taşıma ve dosya sistemi genişletme ayrı işlemlerdir. Fiziksel klon kullanıma açılana kadar çalışan `plan` komutu uyumluluk raporu üretir.
+MacClone'un başlangıç noktası çalışan RAW imaj motorudur. Hedef, sağlıklı bir Mac HDD'nin bütün adreslenebilir sektörlerini SSD ve HDD arasında aynı mantıksal sektör boyuyla güvenle aktarmaktır. Büyük GPT hedefinde açık GPT taşıma modu bulunur. Dosya sistemi genişletme ayrı bir işlemdir. Fiziksel klon kullanıma açılana kadar çalışan `plan` komutu uyumluluk raporu üretir.
 
 ## 6.2 Sol'a ilk görev
 
@@ -29,7 +29,7 @@ GitLab issue şablonu `.gitlab/issue_templates/Fiziksel-klon-01.md` doğrudan uy
 
 ## Kaynak paketini projeye aktarma
 
-`MacClone-gitlab.bundle` `main` başlangıç dalını ve ilk değişikliğin `feat/windows-volume-extents` dalını ve sonraki `feat/verified-physical-clone` dalını içerir. Yeni ve boş GitLab projesi için yerelde `git clone -b main MacClone-gitlab.bundle macclone` ile başlayıp origin adresini kendi GitLab projenize ayarlayabilirsiniz. Var olan bir projeye aktarımda normal bir dal ve merge request kullanın. ZIP kullanılıyorsa arşiv içindeki `macclone` klasörünün içeriği, gizli `.gitlab` dizini ve `.gitlab-ci.yml` dahil GitLab deposunun köküne yerleştirilir.
+`MacClone-gitlab.bundle` güncel `main` dalını, `feat/windows-volume-extents`, `feat/verified-physical-clone` ve `feat/starlit-macclone` geliştirme dallarını içerir. Aynı bundle GitHub projelerine aktarılabilir. Yeni ve boş GitLab projesi için yerelde `git clone -b main MacClone-gitlab.bundle macclone` ile başlayıp origin adresini kendi GitLab projenize ayarlayabilirsiniz. Var olan bir projeye aktarımda normal bir dal ve merge request kullanın. ZIP kullanılıyorsa arşiv içindeki `macclone` klasörünün içeriği, gizli `.gitlab` dizini ve `.gitlab-ci.yml` dahil GitLab deposunun köküne yerleştirilir.
 
 
 ## Fiziksel klon dalının durumu

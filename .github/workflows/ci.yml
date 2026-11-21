@@ -15,7 +15,9 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
+      - run: cargo test --locked --features windows-physical-clone
+      - if: runner.os == 'Windows'
+        run: cargo clippy --locked -p macclone -p mc-device --features windows-physical-clone --all-targets -- -D warnings
       - run: cargo build --locked -p macclone
       - if: runner.os == 'Windows'
         run: python scripts/smoke.py target/debug/macclone.exe

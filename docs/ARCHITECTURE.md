@@ -33,7 +33,7 @@ Vue → typed Tauri commands → application service ← CLI
 | Kaynak canlı ve değişebilir | Tutarlı fiziksel kopya için kaynak önceden çevrimdışı olmalı. Uygulama volume bağlama, ayırma veya format işlemi yapmaz. |
 | 512e → 4Kn veya 4Kn → 512 | Ham fiziksel aktarım reddedilir. LBA ve GPT anlamı değişir. 512n → 512e için mantıksal boy eşit olsa da fiziksel hizalama denetlenir. |
 | Hedef küçük | Kullanılan alan sığsa bile son kaynak baytı korunamaz. Reddedilir. |
-| Hedef büyük | İmaj kaynak uzunluğunda tutulur. Fiziksel aktarım için ayrıca politika gerekir. Eski konumdaki yedek GPT son LBA'ya kendiliğinden taşınmaz, hedef kuyruğu eski bir GPT içerebilir. İlk politika tam eşit uzunluk ister. |
+| Hedef büyük | Açık GPT taşıma onayı gerekir. İki GPT kopyası denetlenir. Koruyucu MBR ve başlıklar güncellenir, eski yedek metadata ve yeni boş alan sıfırlanır. Bölüm sınırları ve kimlikleri korunur. |
 | Hasarlı GPT / bilinmeyen FS | İnceleme kısmi veya hatalı olarak görünür. Kaynak değişmeden imajlanabilir. |
 | Okunamayan sektör | Normal aktarım durur. Kurtarma modunda sektör denemesi, açıkça kayıtlı sıfır dolgu ve eksik sonuç. Sıfır dolgunun hash'i kaynak sektörün hash'i değildir. |
 | FileVault / SSV / APFS snapshot | Taşınabilen şifreli baytlar korunur. Anahtarla açılabilirlik, seal geçerliliği ve gerçek donanımda boot ayrı kanıt gerektirir. |
@@ -108,3 +108,10 @@ Uygulanmış sınırlar ve komutlar README dosyasında yer alır. Buradaki fizik
 İlk motorun blok boyu 512 B veya 4096 B mantıksal sektöre hizalı, en çok 8 MiB'dir. Her blokta iki kalıcı yazma bariyeri vardır. Bu tercih küçük blokta özellikle USB HDD performansını düşürür. Gruplu checkpoint optimizasyonunun kabul koşulu herhangi bir güç kesiminde map'in kalıcı verinin önüne geçmemesidir. Ek bellek gereksinimi transfer bloğu, tek journal satırı ve fiziksel okuyucunun 64 KiB hizalı tamponuyla sınırlıdır. GPT dizi limiti ayrı olarak 16 MiB ve 16.384 girdidir.
 
 Başarı ölçüleri: aradaki boşluklara yazılan sentineller dahil kaynak aralığının tam eşitliği; başlangıçta ve resume sonunda kaynak hash'inin değişmemesi; iptalin kalıcı son parçayı aşmaması; hedef veya günlük flush hatasında başarı raporunun üretilmemesi; tek sektörü kayıp bir işte doğrulanmış kaynak kapsamının tam bir mantıksal sektör eksilmesi. Yerel testten geçen bu motorun fiziksel restore yetkisi, Windows VHDX ve hot-plug kabul deneylerinden bağımsız olarak açılamaz.
+
+
+## Büyük GPT hedefi
+
+`mc-inspect::GptRelocation` salt okunur beklenen hedef akışını oluşturur. Koruyucu MBR ve iki geçerli GPT kopyası, aynı bölüm dizisi, geçerli bölüm aralıkları ve GPT yedeğinin kaynak sonundaki konumu şarttır. Hibrit MBR, kayıp kopya, çakışan bölümler veya hizasız hedef reddedilir. Akış aynı veri bloklarını taşır ve yalnızca GPT/MBR metadata dönüşümlerini ve sıfır aralıklarını uygular. Eski yedek GPT ile yeni yedek alanın çakıştığı tek sektör büyüme de desteklenir.
+
+Günlük eski kaynak boyutunu ve büyük hedef boyutunu birlikte saklar. Devam sırasında GPT beklenen akışı aynı kaynaktan yeniden hazırlanır. Rapor, GPT taşınmışsa kaynak boyutunu `gpt_relocated_from_bytes` alanıyla bildirir. Bu modda `verified_bytes` dönüştürülmüş hedef içeriğinin doğrulanan uzunluğudur. Bölüm içi dosya sistemi kapsamı ve bölüm konumu aynı kalır. Tam eşit boyutta eski RAW sözleşmesi geçerlidir.

@@ -58,7 +58,12 @@ fn guid(b: &[u8]) -> String {
             .collect::<String>()
     )
 }
+mod relocate;
+pub use relocate::{GptRelocation, RelocatedReader};
+
 struct Gpt {
+    header: Vec<u8>,
+    entries_at: u64,
     first: u64,
     last: u64,
     other: u64,
@@ -116,13 +121,16 @@ fn gpt<R: Read + Seek>(r: &mut R, at_lba: u64, total: u64, s: u64) -> io::Result
     if crc32fast::hash(&entries) != u32le(&h, 88) {
         return Err(bad("GPT entry array CRC"));
     }
+    h[16..20].copy_from_slice(&crc.to_le_bytes());
     Ok(Gpt {
+        entries_at,
         first,
         last,
         other,
         id: guid(&h[56..72]),
         entries,
         stride,
+        header: h,
     })
 }
 pub fn inspect<R: Read + Seek>(r: &mut R, bytes: u64, sector: u32) -> io::Result<Layout> {

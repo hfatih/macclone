@@ -159,7 +159,7 @@ fn open_disk(_: u32, _: &str, _: bool) -> io::Result<Source> {
 mod topology;
 #[cfg(all(windows, feature = "windows-physical-clone"))]
 pub use topology::approval::{ApprovedClone, PreparedClone};
-pub use topology::{ClonePlan, TopologyIssue, plan_disks};
+pub use topology::{CloneLayout, ClonePlan, TopologyIssue, plan_disks};
 #[cfg(all(windows, feature = "windows-physical-clone"))]
 pub use win::PhysicalTarget;
 
@@ -204,8 +204,8 @@ fn plan(source: &Disk, target: &Disk) -> Vec<String> {
     if target.readonly != Some(false) {
         reasons.push("Target is read-only or write state is unknown".into())
     }
-    if source.bytes != target.bytes {
-        reasons.push("Physical clone policy requires equal capacities".into())
+    if source.bytes > target.bytes {
+        reasons.push("Destination is smaller than the source disk".into())
     }
     if source.logical != target.logical {
         reasons.push("Logical sector sizes differ".into())
@@ -280,12 +280,30 @@ mod tests {
     }
     #[test]
     fn capacity_and_tail() {
-        for n in [4096, 16384] {
-            let mut b = disk(2);
-            b.bytes = n;
-            assert!(!plan(&disk(1), &b).is_empty())
-        }
+        let mut smaller = disk(2);
+        smaller.bytes = 4096;
+        assert!(!plan(&disk(1), &smaller).is_empty());
+        let mut larger = disk(2);
+        larger.bytes = 16384;
+        assert!(plan(&disk(1), &larger).is_empty());
     }
+    #[test]
+    fn hdd_and_ssd_models_can_be_source_or_target() {
+        let mut hdd = disk(1);
+        let mut ssd = disk(2);
+        hdd.model = "HDD".into();
+        ssd.model = "SSD".into();
+        assert!(plan(&hdd, &ssd).is_empty());
+        assert!(plan(&ssd, &hdd).is_empty());
+        hdd.bytes *= 2;
+        assert!(plan(&ssd, &hdd).is_empty());
+        assert_eq!(
+            CloneLayout::for_sizes(ssd.bytes, hdd.bytes),
+            CloneLayout::RelocateGpt
+        );
+        assert!(!plan(&hdd, &ssd).is_empty());
+    }
+
     #[test]
     fn sector_mismatch() {
         let mut b = disk(2);

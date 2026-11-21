@@ -1939,6 +1939,7 @@ name = "mc-engine"
 version = "0.1.0"
 dependencies = [
  "mc-device",
+ "mc-inspect",
  "same-file",
  "serde",
  "serde_json",

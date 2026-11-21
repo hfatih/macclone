@@ -2,7 +2,9 @@
 import argparse
 import hashlib
 import json
+import struct
 import subprocess
+import zlib
 import tempfile
 from pathlib import Path
 from make_fixture import make
@@ -51,11 +53,47 @@ with tempfile.TemporaryDirectory() as root:
             print(f'{sector} B GPT layout: both engines match all {len(raw)} source bytes')
         assert report == cli('image', src, job, '--resume', *settings)
         cli('image', src, job, *settings, success=False)
+        old_backup = struct.unpack_from('<Q', raw, len(raw)-sector+72)[0] * sector
+        for extra_sectors in (1, 65):
+            larger = folder / f'larger-{extra_sectors}'
+            size = len(raw) + extra_sectors * sector
+            expanded = cli('image', src, larger, *settings, '--target-bytes', size)
+            result = (larger/'image.raw').read_bytes()
+            assert size == len(result) == expanded['target_reread_bytes']
+            assert expanded['gpt_relocated_from_bytes'] == len(raw)
+            assert expanded['sha256'] == hashlib.sha256(result).hexdigest()
+            assert result[sector*2:old_backup] == raw[sector*2:old_backup]
+            new_backup = old_backup + extra_sectors * sector
+            assert result[old_backup:new_backup] == bytes(new_backup-old_backup)
+            assert result[new_backup:-sector] == raw[old_backup:-sector]
+            assert struct.unpack_from('<I', result, 458)[0] == size // sector - 1
+            for offset in (sector, size-sector):
+                header = bytearray(result[offset:offset+92])
+                expected = struct.unpack_from('<I', header, 16)[0]
+                header[16:20] = bytes(4)
+                assert zlib.crc32(header) == expected
+            target_layout = cli('inspect', larger/'image.raw', *settings)
+            assert target_layout['partitions'] == layout['partitions']
+            assert not target_layout['warnings']
+            assert expanded == cli('image', src, larger, *settings, '--target-bytes', size, '--resume')
+            cli('image', src, larger, *settings, '--target-bytes', size+sector, '--resume', success=False)
+        small = folder/'smaller'
+        cli('image', src, small, *settings, '--target-bytes', len(raw)-sector, success=False)
+        assert not small.exists()
+        hybrid = folder/'hybrid.raw'
+        hybrid_data = raw[:]
+        hybrid_data[466] = 0xaf
+        hybrid.write_bytes(hybrid_data)
+        cli('image', hybrid, folder/'hybrid-job', *settings, '--target-bytes', len(raw)+sector, success=False)
+        assert not (folder/'hybrid-job').exists()
+        assert src.read_bytes() == raw
         # Damage the primary table, then the secondary table. Inspection never repairs either.
         raw[2*sector + 7] ^= 1
         src.write_bytes(raw)
         assert 'Using backup GPT' in cli('inspect', src, *settings)['warnings'][0]
+        cli('image', src, folder/'bad-gpt', *settings, '--target-bytes', len(raw)+sector, success=False)
+        assert not (folder/'bad-gpt').exists()
         raw[-sector+16] ^= 1
         src.write_bytes(raw)
         cli('inspect', src, *settings, success=False)
-        print(f'{sector} B: GPT/EFI/APFS, dry-run, full clone, SHA-256, resume, refusal, backup fallback and both CRC failures passed')
+        print(f'{sector} B: GPT/EFI/APFS, dry-run, full clone, SHA-256, resume, refusal, larger GPT relocation and backup CRC checks passed')

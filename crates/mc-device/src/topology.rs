@@ -12,8 +12,26 @@ mod locations;
 #[cfg(windows)]
 pub(super) mod windows;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloneLayout {
+    Exact,
+    RelocateGpt,
+}
+
+impl CloneLayout {
+    pub fn for_sizes(source: u64, target: u64) -> Self {
+        if target > source {
+            Self::RelocateGpt
+        } else {
+            Self::Exact
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ClonePlan {
+    pub layout: CloneLayout,
     pub source: Disk,
     pub target: Disk,
     pub blockers: Vec<String>,
@@ -194,6 +212,7 @@ pub fn plan_disks(source: u32, target: u32) -> io::Result<ClonePlan> {
     blockers.extend(topology_issues.iter().map(|issue| issue.detail.clone()));
     blockers.dedup();
     Ok(ClonePlan {
+        layout: CloneLayout::for_sizes(source.bytes, target.bytes),
         source,
         target,
         blockers,

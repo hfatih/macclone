@@ -51,3 +51,11 @@ Windows x64 çapraz derleme ve Clippy geçti. Masaüstü için `npm run lint` ve
 - Windows x64 GNU hedefi için aday CLI derlendi. Windows cihaz ve CLI kodu Clippy denetiminden geçti. VHDX kabul testi Windows x64 test ikilisine bağlandı. GitLab YAML şeması doğrulandı.
 - VHDX testi Windows üzerinde **yürütülmedi**. İzole Windows testinde her sektör boyu için iki yeni, geçici VHDX oluşturulur. Ham kaynak tanıtıcısı okuma hakkıyla yeniden açılır. Hedefe aktarım ve flush sonrasında hedef başka bir tanıtıcıyla yeniden okunup tüm byte aralıkları karşılaştırılır. Test, işletim sisteminin kendi oluşturduğu VHDX için döndürdüğü aygıt yolunu kullanır. Normal test koşusunda bu kabul testi atlanır.
 - Bu ortamda gerçek HDD/SSD yazımı, Windows GUI'den yetkili yardımcı, fiziksel USB/SATA bağlantı kaybı ve macOS açılışı denenmedi. Çevrimdışı ham diske erişim sürücüye ve Windows depolama politikasına bağlıdır. Aday CLI herhangi bir yazma yapmadan önce gerekli Win32 sorgusu ya da erişim başarısızlığını hata döndürür.
+
+## MacClone ve Starlit Studios dalı
+
+- 46 Rust testi geçti. Yerel plan testi, HDD ve SSD'yi iki yönde seçti. Daha büyük HDD'ye yönelince GPT taşıma modu seçildi. Aynı diskler ters çevrilip daha küçük SSD hedeflenince plan engellendi.
+- CLI kabul testi her iki sektör boyunda eşit boyut için `partition-manager` ile bayt eşitliğini tekrar doğruladı. 512 ve 4096 bayt sektörlü GPT imajları önce bir, sonra 65 sektör büyütüldü. İki başlığın CRC'si Python ile bağımsız hesaplandı. Bölüm sınırları ve içerikleri aynı kaldı, koruyucu MBR ve yedek GPT yeni kapasiteye taşındı, yeni boş alan sıfırlandı.
+- Aynı hedef boyutuyla devam ve farklı boyutla devamın reddi test edildi. Küçük hedef, hibrit MBR ve tek kopyası bozuk GPT daha büyük imaj oluşturamadı. Kaynak baytları değişmedi.
+- Vue lint ve üretim derlemesi geçti. Chromium'da sentetik Tauri çağrılarıyla logo yükleme, Starlit Studios ibaresi, modellerin iki yönlü seçimi, kapasite uyarısı ve seçim değişince eski planın temizlenmesi doğrulandı.
+- Windows x64 aday CLI ve MacClone masaüstü çapraz derlemeleri geçti. Fiziksel 512/4096 bayt sektörlü disk yazımı, yerel Windows VHDX kabulü ve macOS açılışı bu ortamda çalıştırılmadı.

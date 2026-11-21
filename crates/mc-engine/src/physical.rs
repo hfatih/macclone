@@ -1,5 +1,5 @@
 use super::*;
-use mc_device::{ApprovedClone, PhysicalTarget};
+use mc_device::{ApprovedClone, CloneLayout, PhysicalTarget};
 
 pub fn clone_physical(
     approved: ApprovedClone,
@@ -22,14 +22,34 @@ pub fn clone_physical(
             .clone()
             .ok_or_else(|| invalid("Missing approved source identity"))?,
     };
+    let layout = plan.layout;
     let session = approved.prepare_journal(resume)?;
     let directory = session.job().to_owned();
     let job = Journal::open(&directory, resume)?;
-    let (source, mut target, _held_session) = session.open([&job.manifest, &job.map])?.into_parts();
-    if source.stamp.bytes != target.capacity() {
-        return Err(invalid("Physical clone requires equal endpoint capacities"));
-    }
-    transfer(&input, source, &mut target, job, options, cancel, progress)
+    let (mut source, mut target, _held_session) =
+        session.open([&job.manifest, &job.map])?.into_parts();
+    let gpt = match layout {
+        CloneLayout::Exact if source.stamp.bytes == target.capacity() => None,
+        CloneLayout::Exact => return Err(invalid("Physical clone endpoint capacity changed")),
+        CloneLayout::RelocateGpt => Some(mc_inspect::GptRelocation::prepare(
+            &mut source.reader,
+            source.stamp.bytes,
+            target.capacity(),
+            source.stamp.sector,
+        )?),
+    };
+    transfer(
+        &input,
+        TransferSource {
+            original: source,
+            gpt,
+        },
+        &mut target,
+        job,
+        options,
+        cancel,
+        progress,
+    )
 }
 
 impl Durable for PhysicalTarget {

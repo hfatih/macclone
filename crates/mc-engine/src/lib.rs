@@ -45,6 +45,8 @@ struct Manifest {
     options: Options,
     target_id: String,
     map_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relocated_gpt_target_bytes: Option<u64>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 struct Frame<T> {
@@ -78,6 +80,8 @@ pub struct Report {
     pub source_identity: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub destination_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpt_relocated_from_bytes: Option<u64>,
 }
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -190,8 +194,45 @@ pub fn run(
     progress: impl FnMut(Progress),
 ) -> io::Result<Report> {
     let source = open_source(input, true)?;
-    run_with(input, source, dir, options, resume, cancel, progress)
+    write_image(input, source.into(), dir, options, resume, cancel, progress)
 }
+pub fn run_relocated(
+    input: &Input,
+    dir: &Path,
+    target_bytes: u64,
+    options: Options,
+    resume: bool,
+    cancel: &AtomicBool,
+    progress: impl FnMut(Progress),
+) -> io::Result<Report> {
+    if options.recovery {
+        return Err(invalid(
+            "GPT relocation requires readable source metadata and data",
+        ));
+    }
+    checkpoint(cancel)?;
+    let mut source = open_source(input, true)?;
+    let gpt = mc_inspect::GptRelocation::prepare(
+        &mut source.reader,
+        source.stamp.bytes,
+        target_bytes,
+        source.stamp.sector,
+    )?;
+    write_image(
+        input,
+        TransferSource {
+            original: source,
+            gpt: Some(gpt),
+        },
+        dir,
+        options,
+        resume,
+        cancel,
+        progress,
+    )
+}
+
+#[cfg(test)]
 fn run_with(
     input: &Input,
     source: Source,
@@ -201,8 +242,20 @@ fn run_with(
     cancel: &AtomicBool,
     progress: impl FnMut(Progress),
 ) -> io::Result<Report> {
+    write_image(input, source.into(), dir, options, resume, cancel, progress)
+}
+
+fn write_image(
+    input: &Input,
+    source: TransferSource,
+    dir: &Path,
+    options: Options,
+    resume: bool,
+    cancel: &AtomicBool,
+    progress: impl FnMut(Progress),
+) -> io::Result<Report> {
     local_path(dir)?;
-    options.validate(source.stamp.sector)?;
+    options.validate(source.original.stamp.sector)?;
     checkpoint(cancel)?;
     if !resume {
         fs::create_dir(dir)?
@@ -216,7 +269,7 @@ fn run_with(
         path,
     };
     let job = Journal::open(dir, resume)?;
-    if let Some(f) = source.backing_file.as_ref() {
+    if let Some(f) = source.original.backing_file.as_ref() {
         distinct(&[f, &target.file, &job.manifest, &job.map])?;
     } else {
         distinct(&[&target.file, &job.manifest, &job.map])?;
@@ -315,9 +368,23 @@ impl Target for ImageTarget {
     }
 }
 
+struct TransferSource {
+    original: Source,
+    gpt: Option<mc_inspect::GptRelocation>,
+}
+
+impl From<Source> for TransferSource {
+    fn from(original: Source) -> Self {
+        Self {
+            original,
+            gpt: None,
+        }
+    }
+}
+
 fn transfer<T: Target>(
     input: &Input,
-    mut source: Source,
+    stream_source: TransferSource,
     target: &mut T,
     job: Journal<'_>,
     options: Options,
@@ -330,6 +397,11 @@ fn transfer<T: Target>(
         mut manifest,
         mut map,
     } = job;
+    let TransferSource {
+        original: mut source,
+        gpt,
+    } = stream_source;
+    let relocated_bytes = gpt.as_ref().map(mc_inspect::GptRelocation::target_bytes);
     let actual = Manifest {
         version: 1,
         input: input.clone(),
@@ -337,6 +409,7 @@ fn transfer<T: Target>(
         options,
         target_id: target.identity()?,
         map_id: file_id(&map)?.0,
+        relocated_gpt_target_bytes: relocated_bytes,
     };
     if resume {
         if read_manifest(&mut manifest)? != actual {
@@ -347,12 +420,16 @@ fn transfer<T: Target>(
         manifest.sync_all()?;
         sync_dir(dir)?
     }
-    let total = source.stamp.bytes;
+    let total = relocated_bytes.unwrap_or(source.stamp.bytes);
     let sector = source.stamp.sector;
     let mut buffer = vec![0; options.block as usize];
     if target.length()? > total {
         return Err(invalid("Target is longer than source"));
     }
+    let mut view: Box<dyn mc_device::Reader + '_> = match gpt.as_ref() {
+        Some(gpt) => Box::new(gpt.reader(&mut *source.reader)),
+        None => Box::new(&mut *source.reader),
+    };
     let mut offset = 0;
     let mut missing = 0;
     let mut stream = Sha256::new();
@@ -408,11 +485,7 @@ fn transfer<T: Target>(
         {
             let to = hole * sector as usize;
             if to > from {
-                read_at(
-                    &mut *source.reader,
-                    offset + from as u64,
-                    &mut buf[from..to],
-                )?
+                read_at(&mut *view, offset + from as u64, &mut buf[from..to])?
             }
             if to < n {
                 buf[to..to + sector as usize].fill(0);
@@ -441,14 +514,7 @@ fn transfer<T: Target>(
         checkpoint(cancel)?;
         let n = (total - offset).min(options.block as u64) as usize;
         let buf = &mut buffer[..n];
-        let holes = acquire(
-            &mut *source.reader,
-            offset,
-            buf,
-            sector,
-            options.recovery,
-            cancel,
-        )?;
+        let holes = acquire(&mut *view, offset, buf, sector, options.recovery, cancel)?;
         let rec = Record {
             start: offset,
             end: offset + n as u64,
@@ -480,6 +546,7 @@ fn transfer<T: Target>(
         return Err(invalid("Destination SHA-256 mismatch"));
     }
     target.check_snapshot(total, target_snapshot)?;
+    drop(view);
     check_source_file(input, &source)?;
     checkpoint(cancel)?;
     let report = Report {
@@ -493,6 +560,7 @@ fn transfer<T: Target>(
         schema_version: 1,
         source_identity: source.stamp.identity,
         destination_identity: T::REPORT_DEVICE_IDENTITY.then_some(actual.target_id),
+        gpt_relocated_from_bytes: relocated_bytes.map(|_| source.stamp.bytes),
     };
     // Publish only a complete report. A resume of a completed job checks the old report.
     let path = dir.join("report.json");
@@ -1099,7 +1167,7 @@ mod destination_tests {
     ) -> io::Result<Report> {
         transfer(
             source,
-            open_source(source, true)?,
+            open_source(source, true)?.into(),
             target,
             Journal::open(dir, resume)?,
             Options {
