@@ -63,6 +63,15 @@ Kaynak → hedef → uyumluluk → bölüm görünümü → onay → transfer �
 
 Uygulanmış sınırlar ve komutlar README dosyasında yer alır. Buradaki fiziksel yazma kabul şartları tamamlanmadan masaüstü uygulamasına yazılabilir disk bağlantısı verilmez.
 
+## Uygulanan Windows topoloji denetimi
+
+`mc-device::plan_disks` CLI ve masaüstünün kullandığı salt okunur planı üretir. Seçilen cihazların kimlik, geometri ve durum alanları tarama sonrası yeniden sorgulanır. CLI, mevcut JSON alanlarıyla birlikte `topology_issues` altında gerekçe kodunu ve mevcutsa disk numarası ve volume GUID'ini verir.
+
+- Windows dizini işletim sisteminden alınır. Açılan dosya veya dizin tanıtıcısı yolu volume GUID'ine çözer. EFI önyükleme diski için `MSFT_Disk.IsSystem` kullanılır. Bu işaret harfsiz EFI bölümlerini de kapsar. EFI diskini belirleyemeyen kurulumda plan engellenir.
+- `FindFirstVolumeW` ve takip eden tarama, sürücü harfi bulunmayan yerel volume'ları da kontrol eder. `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` yanıtı Windows x64 yerleşimine göre denetlenir. Tampon en fazla 4096 extent'e kadar büyütülür. Optik ve ağ olarak tanınan volume'lar atlanır. Tanınmayan, erişimi reddedilen, envanterle uyuşmayan veya aygıtı kaybolan bir volume gerekli topolojiyi belirsiz bırakır ve planı engeller.
+- Etkin sayfa dosyaları `Win32_PageFileUsage` içinden gelir. Çökme dökümü için `CrashControl` modu, varsa `DedicatedDumpFile` ve moda bağlı çıktı yolu korunur. Devre dışı döküm modu bir konum gerektirmez. Etkin veya bilinmeyen bir modda çözülemeyen yapılandırma engeldir. Özel aygıt yolları ve işletim sisteminden güvenle genişletilemeyen yol değişkenleri bu sürümde çözümsüz raporlanır.
+- Henüz oluşturulmamış döküm dosyası için mevcut üst dizinin volume'u sorgulanır. Açılan tanıtıcı üzerinden volume GUID'i çözüldüğünden bir NTFS mount point veya junction farklı bir diske uzanıyorsa o disk değerlendirilir. Yerleşimin kararlı olduğu gerçek yazma oturumu sonraki aşamanın konusu olarak kalır.
+
 ## Teknik dayanaklar
 
 [UEFI GPT yerleşimi](https://uefi.org/specs/UEFI/2.10/05_GUID_Partition_Table_Format.html) · [Microsoft MSFT_Disk](https://learn.microsoft.com/en-us/windows-hardware/drivers/storage/msft-disk) · [CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew) · [volume disk extents](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-ioctl_volume_get_volume_disk_extents) · [Apple Signed System Volume](https://support.apple.com/guide/security/signed-system-volume-security-secd698747c9/web)

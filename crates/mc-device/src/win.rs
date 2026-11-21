@@ -15,6 +15,10 @@ use windows_sys::Win32::System::{
 };
 
 pub fn disks() -> io::Result<Vec<Disk>> {
+    powershell(include_str!("inventory.ps1"))
+}
+
+pub(super) fn powershell<T: serde::de::DeserializeOwned>(script: &str) -> io::Result<T> {
     let mut path = [0u16; 512];
     // SAFETY: the buffer is writable for its stated number of UTF-16 code units.
     let n = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
@@ -29,7 +33,7 @@ pub fn disks() -> io::Result<Vec<Disk>> {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            include_str!("inventory.ps1"),
+            script,
         ])
         .creation_flags(0x08000000)
         .output()?;

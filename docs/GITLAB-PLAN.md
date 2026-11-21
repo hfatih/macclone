@@ -29,4 +29,4 @@ GitLab issue şablonu `.gitlab/issue_templates/Fiziksel-klon-01.md` doğrudan uy
 
 ## Kaynak paketini projeye aktarma
 
-`MacClone-gitlab.bundle` iki başlangıç commit'ini ve `main` dalını içerir. Yeni ve boş GitLab projesi için yerelde `git clone -b main MacClone-gitlab.bundle macclone` ile başlayıp origin adresini kendi GitLab projenize ayarlayabilirsiniz. Var olan bir projeye aktarımda normal bir dal ve merge request kullanın. ZIP kullanılıyorsa arşiv içindeki `macclone` klasörünün içeriği, gizli `.gitlab` dizini ve `.gitlab-ci.yml` dahil GitLab deposunun köküne yerleştirilir.
+`MacClone-gitlab.bundle` `main` başlangıç dalını ve ilk değişikliğin `feat/windows-volume-extents` dalını içerir. Yeni ve boş GitLab projesi için yerelde `git clone -b main MacClone-gitlab.bundle macclone` ile başlayıp origin adresini kendi GitLab projenize ayarlayabilirsiniz. Var olan bir projeye aktarımda normal bir dal ve merge request kullanın. ZIP kullanılıyorsa arşiv içindeki `macclone` klasörünün içeriği, gizli `.gitlab` dizini ve `.gitlab-ci.yml` dahil GitLab deposunun köküne yerleştirilir.

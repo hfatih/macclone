@@ -64,19 +64,11 @@ fn result() -> io::Result<serde_json::Value> {
             )?)?)
         }
         ["plan", a, b] => {
-            let disks = mc_device::disks()?;
-            let pick = |n: &str| -> io::Result<&mc_device::Disk> {
-                let number = n.parse::<u32>().map_err(invalid_number)?;
-                disks
-                    .iter()
-                    .find(|d| d.number == number)
-                    .ok_or_else(|| invalid("Disk missing"))
-            };
-            let source = pick(a)?;
-            let target = pick(b)?;
-            Ok(
-                serde_json::json!({"source":source,"target":target,"blockers":mc_device::plan(source,target),"physical_write_enabled":false}),
-            )
+            let source = a.parse().map_err(invalid_number)?;
+            let target = b.parse().map_err(invalid_number)?;
+            Ok(serde_json::to_value(mc_device::plan_disks(
+                source, target,
+            )?)?)
         }
         ["dry-run", s] => {
             let item = open_source(&src(s)?, true)?;

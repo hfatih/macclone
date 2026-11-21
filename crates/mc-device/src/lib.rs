@@ -156,7 +156,10 @@ fn open_disk(_: u32, _: &str, _: bool) -> io::Result<Source> {
     ))
 }
 
-pub fn plan(source: &Disk, target: &Disk) -> Vec<String> {
+mod topology;
+pub use topology::{ClonePlan, TopologyIssue, plan_disks};
+
+fn plan(source: &Disk, target: &Disk) -> Vec<String> {
     let mut reasons = Vec::new();
     let id = |s: &Option<String>| s.as_deref().unwrap_or("").trim().to_ascii_uppercase();
     if source.number == target.number
@@ -238,7 +241,7 @@ pub fn file_id(file: &File) -> io::Result<(String, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn disk(n: u32) -> Disk {
+    pub(super) fn disk(n: u32) -> Disk {
         Disk {
             number: n,
             model: "Synthetic".into(),

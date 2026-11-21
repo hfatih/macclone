@@ -28,3 +28,18 @@ python3 scripts/smoke.py target/debug/macclone --partition-manager ../partition-
 ```
 
 Kurtarma günlüğüne girmeden hedefe ulaşan fazla baytların tekrar yazıldığı ayrıca sınandı. Son doğrulama bildiriminde iptal edilirse rapor yayımlanmıyor. Linux'ta hedefin doğrulama sırasında büyümesi ve bağımsız SHA-256 kontrolünde kaynak yolundaki dosyanın değiştirilmesi hata döndürdü.
+
+
+## Windows volume extent değişikliği
+
+Bu dalda Linux x64 üzerinde `cargo test --locked` toplam 39 testi geçti. 10 yeni test, harfsiz ve çok diskli volume, Windows ve EFI'nin ayrık diskleri, sayfa dosyaları ve döküm yapılandırması, optik/ağ filtreleme, değişen disk seçimi, kısa veya taşan yanıtlar ve erişim hatalarını kapsıyor. Her iki GPT fixture'ı da referans araçla tam bayt karşılaştırmasını tekrar geçti.
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo clippy --target x86_64-pc-windows-gnu -p macclone-desktop -p macclone -p mc-device --all-targets --locked -- -D warnings
+cargo build --target x86_64-pc-windows-gnu -p macclone -p macclone-desktop --features tauri/custom-protocol --locked
+```
+
+Windows x64 çapraz derleme ve Clippy geçti. Masaüstü için `npm run lint` ve `npm run build` geçti. Chromium üzerinde sentetik Tauri yanıtıyla hedef diskin engel gerekçesi, seçilen disk kimliklerinin gönderilmesi ve seçim değişince eski sonucun temizlenmesi doğrulandı. Win32 ve PowerShell sorgularının etkin pagefile, EFI ve dinamik volume ile gerçek Windows üzerindeki çalışması yerel Windows kabulünde doğrulanacak.

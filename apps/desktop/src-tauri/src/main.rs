@@ -52,17 +52,21 @@ async fn inspect_disk(input: Input) -> Api<mc_inspect::Layout> {
     .map_err(err)
 }
 #[tauri::command]
-async fn plan_clone(source: u32, target: u32) -> Api<Vec<String>> {
-    let disks = list_disks().await?;
-    let pick = |n| {
-        disks
-            .iter()
-            .find(|d| d.number == n)
-            .ok_or("Disk selection changed".to_owned())
-    };
-    let mut reasons = mc_device::plan(pick(source)?, pick(target)?);
-    reasons.push("Fiziksel hedefe yazma bu sürümde kapalı. Kaynaktan RAW imaj alınabilir.".into());
-    Ok(reasons)
+async fn plan_clone(
+    source: u32,
+    target: u32,
+    source_id: Option<String>,
+    target_id: Option<String>,
+) -> Api<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = mc_device::plan_disks(source, target).map_err(err)?;
+        if report.source.id != source_id || report.target.id != target_id {
+            return Err("Disk seçimi değişti. Envanteri yenileyip yeniden seçin.".into());
+        }
+        Ok(report.blockers)
+    })
+    .await
+    .map_err(err)?
 }
 #[tauri::command]
 fn get_operation_status(state: State<'_, Mutex<Jobs>>) -> Api<Status> {

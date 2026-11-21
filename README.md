@@ -101,4 +101,4 @@ tests/fixtures/                Test disklerinin açıklaması
 Cargo.toml, Cargo.lock, LICENSE, CONTRIBUTING.md
 ```
 
-Açık kapsam: fiziksel SSD yazma/restore, volume-extent çözümleme ve broker, detaylı SMART, APFS volume group/snapshot/Preboot ve Recovery inceleme, FileVault açma, HFS+ katalog/journal incelemesi ve gerçek Mac üzerinde boot doğrulaması. Sağlanan mimari bu işleri ayırır. Güncel doğrulama kapsamı docs/VALIDATION.md içindedir.
+Açık kapsam: fiziksel SSD yazma/restore, ayrıcalıklı yazma yardımcısı, detaylı SMART, APFS volume group/snapshot/Preboot ve Recovery inceleme, FileVault açma, HFS+ katalog/journal incelemesi ve gerçek Mac üzerinde boot doğrulaması. Sağlanan mimari bu işleri ayırır. Güncel doğrulama kapsamı docs/VALIDATION.md içindedir.

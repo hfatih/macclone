@@ -6,7 +6,7 @@ export interface Status {id:number;running:boolean;progress:{phase:string;bytes:
 export const api={
  disks:()=>invoke<Disk[]>('list_disks'),
  inspect:(input:Input)=>invoke<Layout>('inspect_disk',{input}),
- plan:(source:number,target:number)=>invoke<string[]>('plan_clone',{source,target}),
+ plan:(source:Disk,target:Disk)=>invoke<string[]>('plan_clone',{source:source.number,target:target.number,sourceId:source.id,targetId:target.id}),
  status:()=>invoke<Status>('get_operation_status'),
  image:(input:Input,directory:string,block:number,recovery:boolean,resume:boolean)=>invoke<number>('create_image',{request:{input,directory,options:{block,recovery},resume}}),
  verify:(input:Input,expected:string)=>invoke<number>('verify_image',{input,expected}),

@@ -33,9 +33,23 @@ async function start(){if(!subject.value)return;const input=subject.value;await 
  else await api.image(input,directory.value,block.value,page.value==='Kurtarma',resume.value)
  apply(await api.status())
 })}
-async function plan(){if(selected.value===null||target.value===null)return;const a=selected.value,b=target.value;await act(async()=>{reasons.value=await api.plan(a,b)})}
+const planChecked=ref(false)
+async function plan(){
+ const source=disks.value.find(d=>d.number===selected.value)
+ const destination=disks.value.find(d=>d.number===target.value)
+ if(!source||!destination)return
+ reasons.value=[]
+ planChecked.value=false
+ await act(async()=>{
+   const blockers=await api.plan(source,destination)
+   if(page.value==='Klon planı'&&source.number===selected.value&&destination.number===target.value){
+     reasons.value=blockers
+     planChecked.value=true
+   }
+ })
+}
 function inspectDisk(d:Disk){selected.value=d.number;mode.value='disk';page.value='Dosya sistemi';void start()}
-watch([page,selected,target,path,sector,mode],()=>{error.value='';layout.value=null;reasons.value=[]},{flush:'sync'})
+watch([page,selected,target,path,sector,mode],()=>{error.value='';layout.value=null;reasons.value=[];planChecked.value=false},{flush:'sync'})
 onMounted(async()=>{try{unlisten=await listen<Status>('operation',e=>apply(e.payload));apply(await api.status());timer=setInterval(()=>{if(status.value?.running)void api.status().then(apply).catch(e=>{error.value=String(e)})},1500)}catch(e){error.value=String(e)}await refresh()})
 onUnmounted(()=>{unlisten?.();clearInterval(timer)})
 </script>
@@ -54,7 +68,7 @@ onUnmounted(()=>{unlisten?.();clearInterval(timer)})
  <section v-if="page==='Klon planı'"><h2>Fiziksel disk uyumluluğu</h2><p>Plan hiçbir bayt yazmaz. Bu sürüm kaynak diski yeni bir RAW imaj dosyasına aktarabilir.</p>
  <label>Kaynak disk<select v-model="selected"><option :value="null">Disk seçin</option><option v-for="d in disks" :key="d.number" :value="d.number">{{d.number}} · {{d.model}} · {{d.serial}} · {{fmt(d.bytes)}}</option></select></label>
  <label>Hedef disk<select v-model="target"><option :value="null">Disk seçin</option><option v-for="d in disks" :key="d.number" :value="d.number">{{d.number}} · {{d.model}} · {{d.serial}} · {{fmt(d.bytes)}}</option></select></label>
- <button class="primary" :disabled="busy||selected===null||target===null" @click="plan">Planı denetle</button><ul><li v-for="reason in reasons" :key="reason">{{reason}}</li></ul></section>
+ <button class="primary" :disabled="busy||selected===null||target===null" @click="plan">Planı denetle</button><p v-if="planChecked&&!reasons.length">Uyumluluk denetimi engel bulmadı.</p><ul v-if="reasons.length" aria-live="polite"><li v-for="reason in reasons" :key="reason">{{reason}}</li></ul></section>
  <template v-if="sourcePages.includes(page)"><section>
  <h2>Kaynak</h2><div class="seg"><button :class="{chosen:mode==='image'}" @click="mode='image'">İmaj dosyası</button><button :class="{chosen:mode==='disk'}" @click="mode='disk'">Fiziksel disk</button></div>
  <label v-if="mode==='image'">RAW dosyasının tam yolu<input v-model="path" placeholder="D:\Arşiv\Mac.raw" spellcheck="false"></label>
