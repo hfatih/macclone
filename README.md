@@ -3,10 +3,43 @@
   <h1>MacClone</h1>
   <p>Windows için macOS disk klonlama, RAW imaj ve doğrulama aracı.</p>
   <p><strong>Starlit Studios tarafından geliştirilmiştir.</strong></p>
-  <p><a href="#klonlama-uyumluluğu">Uyumluluk</a> · <a href="#windowsta-derleme-ve-başlatma">Derleme</a> · <a href="docs/VALIDATION.md">Testler</a> · <a href="LICENSE">MIT lisansı</a></p>
+  <p>
+    <a href="https://github.com/hfatih/macclone/releases/latest"><strong>Windows x64 İndir (v0.1.0)</strong></a> ·
+    <a href="#ekran-görüntüleri">Ekran görüntüleri</a> ·
+    <a href="#klonlama-uyumluluğu">Uyumluluk</a> ·
+    <a href="#windowsta-derleme-ve-başlatma">Derleme</a> ·
+    <a href="docs/VALIDATION.md">Testler</a> ·
+    <a href="LICENSE">MIT lisansı</a>
+  </p>
 </div>
 
 MacClone, HDD ve SSD arasında her iki yönde çalışacak şekilde tasarlandı. Windows masaüstü sürümü diskleri inceler, klon planını denetler ve RAW imaj çıkarır. Fiziksel yazma, Windows kabulü tamamlanana kadar isteğe bağlı geliştirme CLI'sindedir.
+
+## İndirme (Windows 10/11 x64)
+
+Hazır Windows kurulum dosyasını ve tek dosya CLI aracını [Son Sürüm (Releases)](https://github.com/hfatih/macclone/releases/latest) sayfasından indirebilirsiniz:
+
+- **`MacClone_0.1.0_x64-setup.exe`** — Windows 10/11 x64 masaüstü kurulum yükleyicisi (NSIS)
+- **`macclone.exe`** — Taşınabilir Windows x64 CLI aracı
+- **`SHA256SUMS.txt`** — Dosya bütünlüğü doğrulama özetleri
+
+> Not: Kurulum dosyası kod imzalı değildir; Windows SmartScreen uyarısı çıkarsa **Ek bilgi → Yine de çalıştır** seçeneğiyle devam edebilirsiniz.
+
+## Ekran görüntüleri
+
+<p align="center">
+  <img src="docs/screenshots/overview.png" alt="MacClone genel bakış ve disk envanteri" width="100%">
+</p>
+
+<details>
+  <summary>Klon planı ve doğrulama ekranları</summary>
+  <p align="center">
+    <img src="docs/screenshots/plan.png" alt="MacClone klon planı ve GPT boyut uyumluluğu" width="100%">
+  </p>
+  <p align="center">
+    <img src="docs/screenshots/inspect.png" alt="MacClone dosya sistemi inceleme ve SHA-256 doğrulama" width="100%">
+  </p>
+</details>
 
 ## Klonlama uyumluluğu
 
