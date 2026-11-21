@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { HardDrive, ScanSearch } from '@lucide/vue'
+import { HardDrive, Power, ScanSearch } from '@lucide/vue'
 import type { Disk } from './api'
 import { formatBytes } from './ui'
 
 defineProps<{ disks: Disk[]; busy: boolean }>()
-const emit = defineEmits<{ inspect: [disk: Disk] }>()
+const emit = defineEmits<{ inspect: [disk: Disk]; toggleOffline: [disk: Disk] }>()
 
 const healthLabel: Record<string, string> = {
   Healthy: 'Sağlıklı',
@@ -54,6 +54,16 @@ const healthLabel: Record<string, string> = {
             </span>
           </td>
           <td class="cell-action">
+            <button
+              v-if="disk.boot === false && disk.system === false && disk.clustered === false && disk.offline !== null"
+              type="button"
+              class="button button-quiet button-small"
+              :disabled="busy || !disk.id"
+              :aria-label="disk.offline ? `Disk ${disk.number} çevrimiçi yap` : `Disk ${disk.number} çevrimdışı yap`"
+              @click="emit('toggleOffline', disk)"
+            >
+              <Power :size="15" aria-hidden="true" /> {{ disk.offline ? 'Çevrimiçi yap' : 'Çevrimdışı yap' }}
+            </button>
             <button
               type="button"
               class="button button-quiet button-small"

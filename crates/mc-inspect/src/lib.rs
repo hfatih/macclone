@@ -29,20 +29,59 @@ pub struct Layout {
     pub filesystem: String,
     pub warnings: Vec<String>,
 }
+fn format_gib(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{bytes} B")
+    }
+}
 fn fs<R: Read + Seek>(r: &mut R, base: u64, size: u64) -> io::Result<String> {
     let mut b = [0; 1536];
     let n = size.min(b.len() as u64) as usize;
     at(r, base, &mut b[..n])?;
-    Ok(if n >= 40 && &b[32..36] == b"NXSB" {
-        "APFS signature"
-    } else if n >= 1028 && &b[1024..1028] == b"H+\0\x04" {
-        "HFS+ signature"
-    } else if n >= 1028 && &b[1024..1028] == b"HX\0\x05" {
-        "HFSX signature"
-    } else {
-        "Unknown"
+    if n >= 48 && &b[32..36] == b"NXSB" {
+        let block_size = u64::from(u32le(&b, 36));
+        let block_count = u64le(&b, 40);
+        if block_size > 0 && block_count > 0 {
+            let total = block_size.saturating_mul(block_count);
+            return Ok(format!(
+                "APFS ({} konteyner, {} B blok)",
+                format_gib(total),
+                block_size
+            ));
+        }
+        return Ok("APFS signature".into());
     }
-    .into())
+    if n >= 1080 && (&b[1024..1028] == b"H+\0\x04" || &b[1024..1028] == b"HX\0\x05") {
+        let kind = if &b[1024..1026] == b"HX" {
+            "HFSX"
+        } else {
+            "HFS+"
+        };
+        let block_size = u64::from(u32::from_be_bytes(b[1064..1068].try_into().unwrap()));
+        let total_blocks = u64::from(u32::from_be_bytes(b[1068..1072].try_into().unwrap()));
+        let free_blocks = u64::from(u32::from_be_bytes(b[1072..1076].try_into().unwrap()));
+        if block_size > 0 && total_blocks > 0 {
+            let total = block_size.saturating_mul(total_blocks);
+            let used = block_size.saturating_mul(total_blocks.saturating_sub(free_blocks));
+            return Ok(format!(
+                "{kind} ({} dolu / {})",
+                format_gib(used),
+                format_gib(total)
+            ));
+        }
+        return Ok(format!("{kind} signature"));
+    }
+    if n >= 90 && &b[82..90] == b"FAT32   " {
+        return Ok("FAT32 (EFI)".into());
+    }
+    if n >= 62 && (&b[54..62] == b"FAT16   " || &b[54..62] == b"FAT12   ") {
+        return Ok("FAT".into());
+    }
+    Ok("Unknown".into())
 }
 fn guid(b: &[u8]) -> String {
     format!(
@@ -58,6 +97,7 @@ fn guid(b: &[u8]) -> String {
             .collect::<String>()
     )
 }
+pub mod apfs;
 mod relocate;
 pub use relocate::{GptRelocation, RelocatedReader};
 

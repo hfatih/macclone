@@ -43,6 +43,9 @@ fn parse_with(bytes: &[u8], allow_empty: bool) -> io::Result<Vec<Extent>> {
     let entries = bytes
         .get(HEADER..HEADER + count * ENTRY)
         .ok_or_else(malformed)?;
+    if allow_empty && count == 1 && entries[8..24].iter().all(|&b| b == 0) {
+        return Ok(Vec::new());
+    }
     entries
         .as_chunks::<ENTRY>()
         .0
@@ -178,6 +181,11 @@ mod tests {
         let empty = [0u8; HEADER];
         assert!(parse_with(&empty, false).is_err());
         assert_eq!(parse_with(&empty, true).unwrap(), Vec::new());
+        let mut zero_len = [0u8; HEADER + ENTRY];
+        zero_len[..4].copy_from_slice(&1u32.to_le_bytes());
+        zero_len[8..12].copy_from_slice(&3u32.to_le_bytes());
+        assert!(parse_with(&zero_len, false).is_err());
+        assert_eq!(parse_with(&zero_len, true).unwrap(), Vec::new());
         assert!(is_removable_volume(2));
         assert!(!is_removable_volume(3));
     }

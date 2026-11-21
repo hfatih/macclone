@@ -10,4 +10,4 @@ mc-device.workspace = true
 mc-inspect.workspace = true
 mc-engine.workspace = true
 [build-dependencies]
-tauri-build = "2"
+tauri-build = { version = "2", features = [] }

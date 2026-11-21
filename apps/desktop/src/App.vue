@@ -3,11 +3,12 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import {
   Activity, ArrowLeftRight, ArrowRight, ArrowUpRight, CircleAlert, CircleCheck,
-  ClipboardList, Database, FileArchive, HardDrive, LayoutDashboard, LifeBuoy,
-  RefreshCw, ScanSearch, Settings2, ShieldCheck,
+  ClipboardList, Database, Download, FileArchive, Folder, HardDrive, LayoutDashboard, LifeBuoy,
+  RefreshCw, ScanSearch, Settings2, ShieldCheck, Trash2,
 } from '@lucide/vue'
 import logo from '../src-tauri/icons/icon.png'
-import { api, type ClonePlan, type Disk, type Input, type Layout, type Status } from './api'
+import pkg from '../package.json'
+import { api, type ApfsEntry, type ApfsVolumeInfo, type ClonePlan, type Disk, type Input, type Layout, type Status } from './api'
 import { diskLabel, formatBytes, outcomeLabel } from './ui'
 import DeviceTable from './DeviceTable.vue'
 import OperationPanel from './OperationPanel.vue'
@@ -51,8 +52,15 @@ const inventoryLoading = ref(true)
 const statusError = ref('')
 const cancelError = ref('')
 const actionError = ref('')
-const action = ref<'inspect' | 'plan' | 'image' | 'verify' | null>(null)
+const action = ref<'inspect' | 'plan' | 'image' | 'verify' | 'disk' | 'apfs' | null>(null)
 const activity = ref<{ timestamp: string; message: string }[]>([])
+const apfsPartition = ref<{ start_lba: number; end_lba: number } | null>(null)
+const apfsVolumes = ref<ApfsVolumeInfo[]>([])
+const apfsVolume = ref<ApfsVolumeInfo | null>(null)
+const apfsPath = ref('/')
+const apfsEntries = ref<ApfsEntry[]>([])
+const apfsDest = ref('')
+const apfsNotice = ref('')
 const mode = ref<'image' | 'disk'>('image')
 const path = ref('')
 const directory = ref('')
@@ -132,6 +140,12 @@ const canPlan = computed(() =>
   !busy.value && !inventoryLoading.value && Boolean(sourceDisk.value?.id && targetDisk.value?.id)
   && sourceDisk.value?.number !== targetDisk.value?.number,
 )
+const canPrepareTarget = computed(() => {
+  const disk = targetDisk.value
+  return !busy.value && !inventoryLoading.value && Boolean(disk?.id)
+    && disk?.boot === false && disk.system === false && disk.clustered === false && disk.readonly !== true
+    && disk.number !== sourceDisk.value?.number
+})
 const startLabel = computed(() => {
   if (action.value === 'inspect') return 'İnceleniyor…'
   if (action.value === 'verify' || action.value === 'image' || startingId.value !== null) return 'Hazırlanıyor…'
@@ -267,12 +281,112 @@ function reverseDirection() {
   target.value = source
 }
 
+function localizeBlocker(reason: string): string {
+  const offline = /^Disk (\d+) must be offline, non-system, non-boot and non-clustered$/.exec(reason)
+  if (offline) return `Disk ${offline[1]} çevrimdışı olmalı (sistem, önyükleme veya küme diski olmamalı).`
+  const map: Record<string, string> = {
+    'Destination is smaller than the source disk': 'Hedef disk kaynak diskten daha küçük.',
+    'Logical sector sizes differ': 'Disklerin mantıksal sektör boyutları farklı.',
+    'Same or ambiguous physical identity': 'Kaynak ve hedef aynı disk veya fiziksel kimlik belirsiz.',
+    'Target is read-only or write state is unknown': 'Hedef disk salt okunur veya yazma durumu bilinmiyor.',
+  }
+  return map[reason] ?? reason
+}
+
+function localizeGptReason(reason: string): string {
+  const minBytes = /^GPT partitions and backup metadata need at least (\d+) bytes at their current positions$/.exec(reason)
+  if (minBytes) {
+    return `Kaynak diskteki bölümler mevcut boyutlarıyla en az ${formatBytes(Number(minBytes[1]))} gerektiriyor (hedef diskten büyük). İçindeki veri az olsa bile APFS bölümü Windows'tan güvenli küçültülemez; Mac'te "diskutil apfs resizeContainer diskXs2 220g" ile küçültüp tekrar deneyin.`
+  }
+  const map: Record<string, string> = {
+    'Protective MBR does not describe the entire source disk': 'Koruyucu MBR tüm kaynak diski kapsamıyor.',
+    'Source GPT copies or metadata placement disagree': 'Kaynak diskteki birincil ve yedek GPT tabloları uyuşmuyor.',
+    'Expected a single protective MBR entry': 'Kaynak diskte birden fazla MBR girişi (hibrit MBR) var.',
+  }
+  return map[reason] ?? reason
+}
+
+async function toggleDiskOffline(disk: Disk) {
+  if (busy.value || !disk.id || disk.offline === null) return
+  const nextOffline = !disk.offline
+  await act('disk', async () => {
+    await api.setDiskOffline(disk, nextOffline)
+    log(`Disk ${disk.number} ${nextOffline ? 'çevrimdışı' : 'çevrimiçi'} yapıldı.`)
+    await refresh()
+  })
+}
+
+async function prepareTarget() {
+  const destination = targetDisk.value
+  if (!destination || !canPrepareTarget.value) return
+  const ok = window.confirm(
+    `DİKKAT: Disk ${destination.number} (${destination.model || 'Model bilinmiyor'} · ${formatBytes(destination.bytes)} · Seri: ${destination.serial || 'bilinmiyor'}) üzerindeki TÜM bölümler ve veriler kalıcı olarak silinecek, disk sıfırlanıp çevrimdışı yapılacak.\n\nDevam etmek istiyor musunuz?`,
+  )
+  if (!ok) return
+  await act('disk', async () => {
+    await api.prepareTargetDisk(destination)
+    log(`Disk ${destination.number} sıfırlandı ve çevrimdışı yapıldı.`)
+    await refresh()
+  })
+  if (sourceDisk.value && targetDisk.value && canPlan.value) await checkPlan()
+}
+
 async function inspectDisk(disk: Disk) {
   if (busy.value) return
   selected.value = disk.number
   mode.value = 'disk'
   await navigate('inspect')
   await start()
+}
+
+async function openApfsContainer(startLba: number, endLba: number) {
+  const input = subject.value
+  if (!input || busy.value) return
+  apfsPartition.value = { start_lba: startLba, end_lba: endLba }
+  apfsVolumes.value = []
+  apfsVolume.value = null
+  apfsPath.value = '/'
+  apfsEntries.value = []
+  apfsNotice.value = ''
+  await act('apfs', async () => {
+    apfsVolumes.value = await api.apfsVolumes(input, startLba, endLba)
+    log(`APFS konteyneri açıldı (${apfsVolumes.value.length} hacim).`)
+  })
+}
+
+async function browseApfs(vol: ApfsVolumeInfo, nextPath = '/') {
+  const input = subject.value
+  const part = apfsPartition.value
+  if (!input || !part || busy.value) return
+  apfsVolume.value = vol
+  apfsPath.value = nextPath
+  apfsEntries.value = []
+  apfsNotice.value = ''
+  await act('apfs', async () => {
+    apfsEntries.value = await api.apfsListDir(input, part.start_lba, part.end_lba, vol.index, nextPath)
+  })
+}
+
+async function apfsGoUp() {
+  if (!apfsVolume.value || apfsPath.value === '/') return
+  const parts = apfsPath.value.split('/').filter(Boolean)
+  parts.pop()
+  await browseApfs(apfsVolume.value, parts.length ? `/${parts.join('/')}` : '/')
+}
+
+async function extractApfs(targetPath: string) {
+  const input = subject.value
+  const part = apfsPartition.value
+  const vol = apfsVolume.value
+  const dest = apfsDest.value.trim()
+  if (!input || !part || !vol || !dest || busy.value) return
+  apfsNotice.value = ''
+  await act('apfs', async () => {
+    const res = await api.apfsExtract(input, part.start_lba, part.end_lba, vol.index, targetPath, dest)
+    const msg = `Kopyalandı: ${res.files} dosya, ${res.dirs} klasör (${formatBytes(res.bytes)})${res.skipped ? ` · ${res.skipped} atlandı` : ''} → ${dest}`
+    apfsNotice.value = msg
+    log(msg)
+  })
 }
 
 async function cancelOperation() {
@@ -294,6 +408,11 @@ watch([page, selected, target, path, sector, mode, disks, inventoryLoading], () 
   actionError.value = ''
   layout.value = null
   planResult.value = null
+  apfsPartition.value = null
+  apfsVolumes.value = []
+  apfsVolume.value = null
+  apfsEntries.value = []
+  apfsNotice.value = ''
 }, { flush: 'sync' })
 
 async function pollStatus() {
@@ -340,7 +459,7 @@ onUnmounted(() => {
     <aside class="sidebar">
       <div class="brand">
         <img :src="logo" width="44" height="44" alt="">
-        <div><strong>MacClone</strong><span>Starlit Studios</span></div>
+        <div><strong>MacClone</strong><span>Starlit Studios · v{{ pkg.version }}</span></div>
       </div>
       <nav class="navigation" aria-label="Ana menü">
         <div v-for="group in navigation" :key="group.label" class="nav-group">
@@ -401,7 +520,7 @@ onUnmounted(() => {
             </div>
           </div>
           <p v-else-if="inventoryLoading" class="empty-state" role="status">Disk envanteri okunuyor…</p>
-          <DeviceTable v-else-if="disks.length" :disks="disks" :busy="busy" @inspect="inspectDisk" />
+          <DeviceTable v-else-if="disks.length" :disks="disks" :busy="busy" @inspect="inspectDisk" @toggle-offline="toggleDiskOffline" />
           <div v-else class="empty-state">
             <HardDrive :size="24" aria-hidden="true" />
             <strong>Bağlı disk bulunamadı</strong>
@@ -465,12 +584,15 @@ onUnmounted(() => {
             <button class="button button-quiet" type="button" :disabled="busy || !sourceDisk || !targetDisk || selected === target" @click="reverseDirection">
               <ArrowLeftRight :size="17" aria-hidden="true" /> Kaynak ve hedefi değiştir
             </button>
+            <button class="button button-quiet" type="button" :disabled="!canPrepareTarget" @click="prepareTarget">
+              <Trash2 :size="17" aria-hidden="true" /> {{ action === 'disk' ? 'Sıfırlanıyor…' : 'Hedef diski sıfırla ve çevrimdışı yap' }}
+            </button>
           </div>
           <div v-if="planResult" class="notice" :class="planResult.blockers.length ? 'notice-warning' : 'notice-success'" role="status">
             <CircleAlert v-if="planResult.blockers.length" :size="18" aria-hidden="true" /><CircleCheck v-else :size="18" aria-hidden="true" />
             <div>
               <strong>{{ planResult.blockers.length ? 'Fiziksel klon planı engellendi' : 'Aygıt uyumluluğu denetimi geçti' }}</strong>
-              <ul v-if="planResult.blockers.length"><li v-for="reason in planResult.blockers" :key="reason">{{ reason }}</li></ul>
+              <ul v-if="planResult.blockers.length"><li v-for="reason in planResult.blockers" :key="reason">{{ localizeBlocker(reason) }}</li></ul>
             </div>
           </div>
           <div v-if="gptFit" class="notice" :class="gptFit.state === 'fits' ? 'notice-success' : 'notice-danger'" role="status">
@@ -483,7 +605,7 @@ onUnmounted(() => {
             </div>
             <div v-else>
               <strong>Küçük RAW imaj için GPT denetimi geçmedi</strong>
-              <p>{{ gptFit.reason }}</p>
+              <p>{{ localizeGptReason(gptFit.reason) }}</p>
             </div>
           </div>
           <div v-if="gptFit?.state === 'fits'" class="actions">
@@ -571,15 +693,97 @@ onUnmounted(() => {
           </div>
           <div v-if="layout.partitions.length" class="table-wrap" tabindex="0" role="region" aria-label="Bölüm tablosu">
             <table>
-              <thead><tr><th scope="col">Bölüm</th><th scope="col">Başlangıç – son LBA</th><th scope="col">İmza</th></tr></thead>
+              <thead><tr><th scope="col">Bölüm</th><th scope="col">Başlangıç – son LBA</th><th scope="col">İmza</th><th scope="col"><span class="sr-only">İşlem</span></th></tr></thead>
               <tbody>
                 <tr v-for="partition in layout.partitions" :key="partition.start_lba">
                   <th scope="row">{{ partition.label || partition.kind }}</th>
                   <td class="tabular">{{ partition.start_lba }} – {{ partition.end_lba }}</td>
                   <td>{{ partition.filesystem }}</td>
+                  <td class="cell-action">
+                    <button
+                      v-if="partition.filesystem.startsWith('APFS')"
+                      type="button"
+                      class="button button-quiet button-small"
+                      :disabled="busy"
+                      @click="openApfsContainer(partition.start_lba, partition.end_lba)"
+                    >
+                      <Folder :size="15" aria-hidden="true" /> {{ action === 'apfs' ? 'Okunuyor…' : 'Konteyneri aç' }}
+                    </button>
+                  </td>
                 </tr>
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <section v-if="apfsPartition" class="panel" aria-labelledby="apfs-title">
+          <div class="panel-heading">
+            <div class="panel-title"><Folder :size="19" aria-hidden="true" /><h2 id="apfs-title">APFS Konteyner İçeriği</h2></div>
+            <span class="quiet">{{ apfsVolumes.length }} hacim</span>
+          </div>
+          <div v-if="apfsVolumes.length" class="table-wrap" tabindex="0" role="region" aria-label="APFS hacimleri">
+            <table>
+              <thead><tr><th scope="col">Hacim adı</th><th scope="col">Rol</th><th scope="col">Kullanılan alan</th><th scope="col">Durum</th><th scope="col"><span class="sr-only">İşlem</span></th></tr></thead>
+              <tbody>
+                <tr v-for="vol in apfsVolumes" :key="vol.index">
+                  <th scope="row">{{ vol.name || `Hacim #${vol.index}` }}</th>
+                  <td>{{ vol.role }}</td>
+                  <td class="tabular">{{ formatBytes(vol.used_bytes) }}</td>
+                  <td><span class="pill" :class="{ 'pill-neutral': vol.encrypted }">{{ vol.encrypted ? 'Şifreli' : 'Şifresiz' }}</span></td>
+                  <td class="cell-action">
+                    <button type="button" class="button button-quiet button-small" :disabled="busy || vol.encrypted" @click="browseApfs(vol, '/')">
+                      <Folder :size="15" aria-hidden="true" /> Göz at
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="apfsVolume" class="panel-body form">
+            <div class="actions">
+              <strong class="mono">{{ apfsVolume.name }}:{{ apfsPath }}</strong>
+              <button type="button" class="button button-quiet button-small" :disabled="busy || apfsPath === '/'" @click="apfsGoUp">Üst klasör</button>
+            </div>
+            <label class="field">Windows hedef klasörü (kopyalamak için)
+              <input v-model="apfsDest" type="text" placeholder="D:\MacYedek" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="actions">
+              <button type="button" class="button button-primary" :disabled="busy || !apfsDest.trim()" @click="extractApfs(apfsPath)">
+                <Download :size="16" aria-hidden="true" /> {{ action === 'apfs' ? 'Kopyalanıyor…' : 'Bu klasörü kopyala' }}
+              </button>
+            </div>
+            <div v-if="apfsNotice" class="notice notice-success" role="status">
+              <CircleCheck :size="17" aria-hidden="true" /><span>{{ apfsNotice }}</span>
+            </div>
+            <div v-if="apfsEntries.length" class="table-wrap" tabindex="0" role="region" aria-label="APFS dosya listesi">
+              <table>
+                <thead><tr><th scope="col">Ad</th><th scope="col">Tür</th><th scope="col">Boyut</th><th scope="col"><span class="sr-only">İşlem</span></th></tr></thead>
+                <tbody>
+                  <tr v-for="entry in apfsEntries" :key="entry.inode">
+                    <th scope="row">
+                      <button v-if="entry.kind === 'dir'" type="button" class="text-button" :disabled="busy" @click="browseApfs(apfsVolume, entry.path)">
+                        {{ entry.name }}/
+                      </button>
+                      <span v-else>{{ entry.name }}</span>
+                    </th>
+                    <td>{{ entry.kind === 'dir' ? 'Klasör' : entry.kind === 'file' ? 'Dosya' : entry.kind }}</td>
+                    <td class="tabular">{{ entry.kind === 'file' ? formatBytes(entry.size) : '—' }}</td>
+                    <td class="cell-action">
+                      <button
+                        v-if="entry.kind === 'dir' || entry.kind === 'file'"
+                        type="button"
+                        class="button button-quiet button-small"
+                        :disabled="busy || !apfsDest.trim()"
+                        @click="extractApfs(entry.path)"
+                      >
+                        <Download :size="14" aria-hidden="true" /> Kopyala
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="quiet">Bu klasör boş.</p>
           </div>
         </section>
       </template>
@@ -598,6 +802,7 @@ onUnmounted(() => {
             </label>
           </div>
           <p class="quiet">Bir işe devam ederken ilk işlemdeki sektör ve blok boyutlarını kullanın.</p>
+          <p class="quiet">Uygulama sürümü: <strong class="mono">v{{ pkg.version }}</strong> · Starlit Studios</p>
         </div>
       </section>
 

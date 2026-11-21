@@ -46,11 +46,16 @@ impl GptRelocation {
         let [(entry_index, entry)] = protective.as_slice() else {
             return Err(bad("Expected a single protective MBR entry"));
         };
+        let expected_sectors = (original - 1).min(u64::from(u32::MAX)) as u32;
+        let full_sectors = original.min(u64::from(u32::MAX)) as u32;
+        let mbr_sectors = u32le(*entry, 12);
         if mbr[510..512] != [0x55, 0xaa]
             || entry[0] != 0
             || entry[4] != 0xee
             || u32le(*entry, 8) != 1
-            || u32le(*entry, 12) != (original - 1).min(u64::from(u32::MAX)) as u32
+            || (mbr_sectors != expected_sectors
+                && mbr_sectors != full_sectors
+                && mbr_sectors != u32::MAX)
         {
             return Err(bad(
                 "Protective MBR does not describe the entire source disk",

@@ -4,7 +4,7 @@
   <p>Windows için macOS disk klonlama, RAW imaj ve doğrulama aracı.</p>
   <p><strong>Starlit Studios tarafından geliştirilmiştir.</strong></p>
   <p>
-    <a href="https://github.com/hfatih/macclone/releases/latest"><strong>Windows x64 İndir (v0.1.1)</strong></a> ·
+    <a href="https://github.com/hfatih/macclone/releases/latest"><strong>Windows x64 İndir (v0.1.5)</strong></a> ·
     <a href="#ekran-görüntüleri">Ekran görüntüleri</a> ·
     <a href="#klonlama-uyumluluğu">Uyumluluk</a> ·
     <a href="#windowsta-derleme-ve-başlatma">Derleme</a> ·
@@ -19,11 +19,24 @@ MacClone, HDD ve SSD arasında her iki yönde çalışacak şekilde tasarlandı.
 
 Hazır Windows kurulum dosyasını ve tek dosya CLI aracını [Son Sürüm (Releases)](https://github.com/hfatih/macclone/releases/latest) sayfasından indirebilirsiniz:
 
-- **`MacClone_0.1.1_x64-setup.exe`** — Windows 10/11 x64 masaüstü kurulum yükleyicisi (NSIS)
+- **`MacClone_0.1.5_x64-setup.exe`** — Windows 10/11 x64 masaüstü kurulum yükleyicisi (NSIS · otomatik UAC yönetici manifestli)
 - **`macclone.exe`** — Taşınabilir Windows x64 CLI aracı
 - **`SHA256SUMS.txt`** — Dosya bütünlüğü doğrulama özetleri
 
 > Not: Kurulum dosyası kod imzalı değildir; Windows SmartScreen uyarısı çıkarsa **Ek bilgi → Yine de çalıştır** seçeneğiyle devam edebilirsiniz.
+
+## ⚠️ Önemli Not: Daha Küçük SSD'ye APFS Kopyalama (GB Farkı)
+
+Örneğin **320 GB (298 GiB) HDD** üzerindeki bir macOS kurulumunu **240 GB (238 GiB) SSD**'ye açılabilir (bootable) olarak klonlamak istediğinizde, içerideki veri az olsa bile (ör. 20 GB) **APFS konteyneri 297 GiB** olarak tanımlıysa Windows üzerinden doğrudan küçültme yapılamaz:
+
+- **Neden?** APFS (Copy-on-Write B-tree) blokları konteynerin tamamına dağıtır; güvenli blok taşıma/küçültme sürücüsü (`apfs.kext`) Apple tarafından yalnızca macOS'e özel tutulur. Windows'tan zorla 238 GiB'den kesmek macOS'i bozar.
+- **Bootable klon için çözüm (30 saniye):** Kaynak diski Mac'e takıp Terminal'de APFS konteynerini hedef SSD'den küçük bir boyuta çekin:
+  ```bash
+  diskutil list
+  diskutil apfs resizeContainer diskXs2 220g
+  ```
+  Sonrasında Windows'ta MacClone'a geri taktığınızda GPT denetimi geçer.
+- **Sadece verileri/dosyaları kurtarmak için (v0.1.5+):** **Diskler → İncele → Konteyneri aç** ile (Apache-2.0 lisanslı [`SecurityRonin/apfs-forensic`](https://github.com/SecurityRonin/apfs-forensic) `apfs-core` motoru) APFS hacimlerinin (`Macintosh HD`, `Data`, `Preboot`, `Recovery`, `VM`) içini gezebilir ve istediğiniz klasör/dosyaları doğrudan Windows'a kopyalayabilirsiniz.
 
 ## Ekran görüntüleri
 

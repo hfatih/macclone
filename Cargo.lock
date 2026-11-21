@@ -9,6 +9,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "aes-kw"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69fa2b352dcefb5f7f3a5fb840e02665d311d878955380515e4fd50095dd3d8c"
+dependencies = [
+ "aes",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -46,6 +66,26 @@ name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
+name = "apfs-core"
+version = "0.3.0"
+source = "git+https://github.com/SecurityRonin/apfs-forensic#3b55bc3938beedf712842ca021c16ef8ca01fe95"
+dependencies = [
+ "aes",
+ "aes-kw",
+ "bitflags 2.13.2",
+ "chrono",
+ "flate2",
+ "forensicnomicon",
+ "hmac",
+ "lzfse_rust",
+ "lzvn-core",
+ "pbkdf2",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "xts-mode",
+]
 
 [[package]]
 name = "atk"
@@ -341,9 +381,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link",
+]
+
+[[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common 0.1.7",
+ "inout",
 ]
 
 [[package]]
@@ -601,6 +653,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer 0.10.4",
  "crypto-common 0.1.7",
+ "subtle",
 ]
 
 [[package]]
@@ -874,6 +927,31 @@ name = "foreign-types-shared"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
+
+[[package]]
+name = "forensicnomicon"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b644b342c6bc8b81d33a173542042baba336764c85429536ececd437c44c26aa"
+dependencies = [
+ "forensicnomicon-core",
+ "forensicnomicon-data",
+]
+
+[[package]]
+name = "forensicnomicon-core"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b246d2a6b4b0ccc60485626363ce41437cf7c8276a4d08ce888bdada63c2c35"
+
+[[package]]
+name = "forensicnomicon-data"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1af1e5fc4a0cdafce257a88d807f4599b4cf204d6631be87ded01b5c0442d8c5"
+dependencies = [
+ "forensicnomicon-core",
+]
 
 [[package]]
 name = "form_urlencoded"
@@ -1266,6 +1344,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "html5ever"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1551,6 +1638,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f4200d433cbd5178df7797c9c2e75b348b728e39631cf14520d1e2fc424201f4"
 dependencies = [
  "cfb",
+]
+
+[[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "generic-array",
 ]
 
 [[package]]
@@ -1877,8 +1973,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
+name = "lzfse_rust"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5edeac3ec657925dececc672bdd58fa2212291886ddcb3e08aa46924c78340c6"
+
+[[package]]
+name = "lzvn-core"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32c51f6215e459d29ee8b61c52074f545fe5518bcb351c590c6e98aec21a5a00"
+
+[[package]]
 name = "macclone"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "mc-device",
  "mc-engine",
@@ -1891,7 +1999,7 @@ dependencies = [
 
 [[package]]
 name = "macclone-desktop"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "mc-device",
  "mc-engine",
@@ -1925,7 +2033,7 @@ dependencies = [
 
 [[package]]
 name = "mc-device"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -1937,7 +2045,7 @@ dependencies = [
 
 [[package]]
 name = "mc-engine"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "libc",
  "mc-device",
@@ -1952,8 +2060,9 @@ dependencies = [
 
 [[package]]
 name = "mc-inspect"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
+ "apfs-core",
  "crc32fast",
  "serde",
 ]
@@ -2367,6 +2476,15 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "pbkdf2"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+dependencies = [
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -3254,6 +3372,12 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "subtle"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "swift-rs"
@@ -4653,6 +4777,16 @@ dependencies = [
  "libc",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "xts-mode"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09cbddb7545ca0b9ffa7bdc653e8743303e1712687a6918ced25f2cdbed42520"
+dependencies = [
+ "byteorder",
+ "cipher",
 ]
 
 [[package]]

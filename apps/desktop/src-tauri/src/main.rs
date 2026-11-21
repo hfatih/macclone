@@ -117,6 +117,91 @@ async fn list_disks() -> Api<Vec<Disk>> {
         .map_err(err)?
         .map_err(err)
 }
+
+#[cfg(windows)]
+fn run_storage_ps(script: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let out = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(err)?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Err(if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!(
+                "PowerShell komutu başarısız oldu (kod {:?}).",
+                out.status.code()
+            )
+        })
+    }
+}
+
+#[cfg(not(windows))]
+fn run_storage_ps(_script: &str) -> Result<(), String> {
+    Err("Disk hazırlama işlemi yalnızca Windows'ta desteklenir.".into())
+}
+
+fn find_safe_disk(number: u32, expected_id: Option<&str>) -> Result<Disk, String> {
+    let disks = mc_device::disks().map_err(err)?;
+    let disk = disks
+        .into_iter()
+        .find(|d| d.number == number)
+        .ok_or_else(|| format!("Disk {number} bulunamadı. Envanteri yenileyip tekrar deneyin."))?;
+    if disk.id.as_deref() != expected_id {
+        return Err("Disk kimliği değişti. Envanteri yenileyip yeniden seçin.".into());
+    }
+    if disk.boot != Some(false) || disk.system != Some(false) || disk.clustered != Some(false) {
+        return Err(format!(
+            "Güvenlik engeli: Disk {number} sistem, önyükleme veya küme diski olduğu için değiştirilemez."
+        ));
+    }
+    Ok(disk)
+}
+
+#[tauri::command]
+async fn set_disk_offline(number: u32, id: Option<String>, offline: bool) -> Api<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = find_safe_disk(number, id.as_deref())?;
+        let flag = if offline { "$true" } else { "$false" };
+        run_storage_ps(&format!(
+            "$ErrorActionPreference='Stop'; Set-Disk -Number {number} -IsOffline {flag}"
+        ))
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+async fn prepare_target_disk(number: u32, id: Option<String>) -> Api<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let disk = find_safe_disk(number, id.as_deref())?;
+        if disk.readonly == Some(true) {
+            return Err(format!(
+                "Disk {number} salt okunur (read-only) durumda; sıfırlanamaz."
+            ));
+        }
+        let script = format!(
+            "$ErrorActionPreference='Stop'; \
+             Set-Disk -Number {number} -IsOffline $false; \
+             if ((Get-Disk -Number {number}).PartitionStyle -ne 'RAW') {{ \
+               Clear-Disk -Number {number} -RemoveData -RemoveOEM -Confirm:$false \
+             }}; \
+             Set-Disk -Number {number} -IsOffline $true"
+        );
+        run_storage_ps(&script)
+    })
+    .await
+    .map_err(err)?
+}
 #[tauri::command]
 async fn inspect_disk(input: Input) -> Api<mc_inspect::Layout> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -289,13 +374,106 @@ fn verify_image(app: AppHandle, input: Input, expected: String) -> Api<u64> {
         Ok((None, format!("SHA-256 eşleşti · {hash}")))
     })
 }
+fn partition_bounds(
+    start_lba: u64,
+    end_lba: u64,
+    sector: u32,
+    total_bytes: u64,
+) -> io::Result<(u64, u64)> {
+    if end_lba < start_lba {
+        return Err(mc_device::invalid("Geçersiz bölüm LBA aralığı."));
+    }
+    let s = u64::from(sector);
+    let offset = start_lba
+        .checked_mul(s)
+        .ok_or_else(|| mc_device::invalid("Bölüm başlangıcı taşma yaptı."))?;
+    let len = end_lba
+        .saturating_sub(start_lba)
+        .saturating_add(1)
+        .checked_mul(s)
+        .ok_or_else(|| mc_device::invalid("Bölüm boyutu taşma yaptı."))?;
+    if offset.checked_add(len).is_none_or(|end| end > total_bytes) {
+        return Err(mc_device::invalid("Bölüm disk sınırlarını aşıyor."));
+    }
+    Ok((offset, len))
+}
+
+#[tauri::command]
+async fn apfs_volumes(
+    input: Input,
+    start_lba: u64,
+    end_lba: u64,
+) -> Api<Vec<mc_inspect::apfs::ApfsVolumeInfo>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let opened = open_source(&input, false)?;
+        let (offset, len) =
+            partition_bounds(start_lba, end_lba, opened.stamp.sector, opened.stamp.bytes)?;
+        mc_inspect::apfs::list_volumes(opened.reader, offset, len)
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+async fn apfs_list_dir(
+    input: Input,
+    start_lba: u64,
+    end_lba: u64,
+    volume_index: usize,
+    path: String,
+) -> Api<Vec<mc_inspect::apfs::ApfsEntry>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let opened = open_source(&input, false)?;
+        let (offset, len) =
+            partition_bounds(start_lba, end_lba, opened.stamp.sector, opened.stamp.bytes)?;
+        mc_inspect::apfs::list_dir(opened.reader, offset, len, volume_index, &path)
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+async fn apfs_extract(
+    input: Input,
+    start_lba: u64,
+    end_lba: u64,
+    volume_index: usize,
+    path: String,
+    destination: PathBuf,
+) -> Api<mc_inspect::apfs::ExtractSummary> {
+    tauri::async_runtime::spawn_blocking(move || {
+        mc_device::local_path(&destination)?;
+        let opened = open_source(&input, false)?;
+        let (offset, len) =
+            partition_bounds(start_lba, end_lba, opened.stamp.sector, opened.stamp.bytes)?;
+        mc_inspect::apfs::extract_path(
+            opened.reader,
+            offset,
+            len,
+            volume_index,
+            &path,
+            &destination,
+        )
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(Jobs::default()))
         .invoke_handler(tauri::generate_handler![
             list_disks,
             inspect_disk,
+            apfs_volumes,
+            apfs_list_dir,
+            apfs_extract,
             plan_clone,
+            set_disk_offline,
+            prepare_target_disk,
             get_operation_status,
             cancel_operation,
             create_image,

@@ -6,3 +6,4 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 crc32fast.workspace = true
+apfs-core = { git = "https://github.com/SecurityRonin/apfs-forensic", package = "apfs-core" }
