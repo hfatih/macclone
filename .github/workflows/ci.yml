@@ -1,0 +1,57 @@
+name: MacClone
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  core:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --locked -p macclone
+      - if: runner.os == 'Windows'
+        run: python scripts/smoke.py target/debug/macclone.exe
+      - if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+        with:
+          repository: inalto/partition-manager
+          ref: 1d6c43f69c198b5978c19e0d2b5722d28d138938
+          path: reference/partition-manager
+          persist-credentials: false
+      - if: runner.os == 'Linux'
+        run: cargo build --locked -p pm-cli
+        working-directory: reference/partition-manager
+      - if: runner.os == 'Linux'
+        run: python3 scripts/smoke.py target/debug/macclone --partition-manager reference/partition-manager/target/debug/pm
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+        working-directory: apps/desktop
+      - run: npm run lint
+        working-directory: apps/desktop
+      - run: npm run build
+        working-directory: apps/desktop
+      - run: cargo clippy --locked -p macclone-desktop -- -D warnings
+      - run: npm run tauri -- build --bundles nsis -- --locked
+        working-directory: apps/desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-installer
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error

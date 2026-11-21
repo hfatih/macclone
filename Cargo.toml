@@ -1,0 +1,22 @@
+[workspace]
+members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
+default-members = ["crates/mc-device", "crates/mc-inspect", "crates/mc-engine", "apps/cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+crc32fast = "1"
+same-file = "1"
+tempfile = "3"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+mc-device = { path = "crates/mc-device" }
+mc-engine = { path = "crates/mc-engine" }
+mc-inspect = { path = "crates/mc-inspect" }

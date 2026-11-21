@@ -1,0 +1,12 @@
+[package]
+name = "macclone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+mc-engine.workspace = true
+mc-device.workspace = true
+mc-inspect.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

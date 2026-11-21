@@ -1,0 +1,13 @@
+[package]
+name = "macclone-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+tauri = { version = "2", features = [] }
+serde.workspace = true
+mc-device.workspace = true
+mc-inspect.workspace = true
+mc-engine.workspace = true
+[build-dependencies]
+tauri-build = "2"

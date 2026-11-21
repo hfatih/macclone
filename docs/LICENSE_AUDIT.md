@@ -1,0 +1,7 @@
+# Lisans ve dağıtım denetimi
+
+MacClone'a ait kod için MIT seçildi. RESEARCH.md'deki on proje araştırma girdisidir. partition-manager v0.4.1 ayrıca CI sırasında kaynak koddan derlenen bir karşılaştırma aracıdır. Bu projelerin kodu, binary'leri, marka varlıkları veya GPL araçları dağıtıma alınmadı. MIT adayında kaynak alınırsa telif ve izin metni korunur. GPL ailesinden kod bağlamak veya dağıtmak ayrı kaynak sunumu ve lisans değerlendirmesi gerektirir. LGPL dinamik kütüphanesi eklenirse seçilen sürümün bildirimleri, değişiklikler ve yeniden bağlama yükümlülükleri değerlendirilir. FsRover THIRD_PARTY_NOTICES ve Partclone'un gömülü sürücülerinin lisansları depo başlığından farklı olabilir.
+
+DEPENDENCIES.md doğrudan seçimleri listeler. Kilitli bağımlılıkların beyan edilen lisansları ayrıca envanterlenir. Metadata lisans ifadeleri tam hukuki inceleme veya telif bildirimi metni değildir. Kaynak arşivinde üçüncü taraf ikilileri yoktur. İmzalı genel Windows dağıtımından önce hedefe göre taşınan dosyalar, bunların LICENSE/NOTICE metinleri, WebView2 dağıtım şartları ve yükleyici bileşenleri üzerinden nihai bildirim paketi üretilmelidir.
+
+LICENSE_INVENTORY.csv, cargo metadata ve npm kilit dosyasındaki platforma özel ve geliştirme paketlerini de kapsar. CSV'deki `review` veya lisans dosyası işaretleri manifestten kesin bir SPDX ifadesi çıkarılamadığını gösterir. Dağıtılacak binary'ye hangi bağımlılıkların bağlandığı hedefe ve derleme profiline göre daraltılmalıdır.
