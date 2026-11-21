@@ -6,10 +6,11 @@ struct Patch {
     bytes: Vec<u8>,
 }
 
-/// Prepares a larger GPT address space with unchanged partition entries and partition data.
+/// Relocates GPT metadata without changing partition boundaries or data.
 pub struct GptRelocation {
     original_bytes: u64,
     target_bytes: u64,
+    minimum_target_bytes: u64,
     patches: Vec<Patch>,
 }
 
@@ -23,12 +24,12 @@ impl GptRelocation {
         let s = u64::from(sector);
         if !matches!(sector, 512 | 4096)
             || original_bytes < 6 * s
-            || target_bytes <= original_bytes
+            || target_bytes == original_bytes
             || !original_bytes.is_multiple_of(s)
             || !target_bytes.is_multiple_of(s)
         {
             return Err(bad(
-                "GPT relocation requires a larger sector-aligned destination",
+                "GPT relocation requires a different, sector-aligned destination size",
             ));
         }
         let original = original_bytes / s;
@@ -99,18 +100,23 @@ impl GptRelocation {
             return Err(bad("GPT partitions overlap"));
         }
 
-        let delta = target - original;
-        let new_last = primary.last + delta;
-        let entry_lba = secondary.entries_at + delta;
-        let obsolete_start = secondary.entries_at * s;
-        let obsolete_end = original_bytes.min(entry_lba * s);
+        let trailing_sectors = original - primary.last;
+        let last_partition = ranges.last().map_or(primary.first, |range| range.1);
+        let minimum_target_bytes = (last_partition + trailing_sectors) * s;
+        if target_bytes < minimum_target_bytes {
+            return Err(bad(&format!(
+                "GPT partitions and backup metadata need at least {minimum_target_bytes} bytes at their current positions"
+            )));
+        }
+        let new_last = target - trailing_sectors;
+        let entry_lba = target - (original - secondary.entries_at);
         let mbr_count = 446 + entry_index * 16 + 12;
         mbr[mbr_count..mbr_count + 4]
             .copy_from_slice(&((target - 1).min(u64::from(u32::MAX)) as u32).to_le_bytes());
         let primary_entries = primary.entries_at;
         let mut entries = secondary.entries;
         entries.resize((sectors * s) as usize, 0);
-        let patches = vec![
+        let mut patches = vec![
             Patch {
                 start: 0,
                 bytes: mbr,
@@ -119,10 +125,16 @@ impl GptRelocation {
                 start: s,
                 bytes: header(primary.header, 1, target - 1, new_last, primary_entries),
             },
-            Patch {
+        ];
+        if target > original {
+            let obsolete_start = secondary.entries_at * s;
+            let obsolete_end = original_bytes.min(entry_lba * s);
+            patches.push(Patch {
                 start: obsolete_start,
                 bytes: vec![0; (obsolete_end - obsolete_start) as usize],
-            },
+            });
+        }
+        patches.extend([
             Patch {
                 start: entry_lba * s,
                 bytes: entries,
@@ -131,16 +143,21 @@ impl GptRelocation {
                 start: (target - 1) * s,
                 bytes: header(secondary.header, target - 1, 1, new_last, entry_lba),
             },
-        ];
+        ]);
         Ok(Self {
             original_bytes,
             target_bytes,
+            minimum_target_bytes,
             patches,
         })
     }
 
     pub fn target_bytes(&self) -> u64 {
         self.target_bytes
+    }
+
+    pub fn minimum_target_bytes(&self) -> u64 {
+        self.minimum_target_bytes
     }
 
     pub fn reader<R: Read + Seek>(&self, source: R) -> RelocatedReader<'_, R> {

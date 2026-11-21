@@ -14,7 +14,8 @@ MacClone, HDD ve SSD arasında her iki yönde çalışacak şekilde tasarlandı.
 |---|---|
 | HDD → SSD veya SSD → HDD, eşit kapasite ve aynı mantıksal sektör boyu | EFI, GPT, APFS/HFS+ ve ayrılmamış alanlar dahil tam disk, bayt bayt kopyalanır. |
 | Kaynak daha küçük, hedef daha büyük, mantıksal sektör boyu eşit | Sağlam GPT için `--relocate-gpt` kullanılır. Koruyucu MBR ve GPT başlıkları güncellenir, yedek tablo son LBA'ya taşınır. Bölüm GUID'leri, sınırları ve içerikleri korunur. Ek alan boş kalır. |
-| Hedef daha küçük veya mantıksal sektör boyu farklı | Plan engellenir. |
+| Hedef daha küçük, mevcut GPT bölümleri hedefe sığıyor | CLI, hedef boyutunda bağımsız bir RAW imaj oluşturabilir. Fiziksel klon planı engellenir. |
+| Mantıksal sektör boyu farklı veya mevcut bölümler hedefe sığmıyor | İlgili klon veya hedef boyutu için imaj işlemi engellenir. |
 | Büyük hedef, kaynakta hasarlı ya da hibrit GPT | GPT taşıma işlemi reddedilir. Kaynağın kendi boyutunda RAW imaj alınabilir. |
 
 SHA-256, hedefin yeniden okunan içeriğini doğrular. Eşit kapasitede karşılaştırma doğrudan kaynakla yapılır. Büyük hedefte beklenen sonuç, taşınan GPT ve sıfırlanan ek alanla birlikte doğrulanır. macOS'un klondan açılması ayrıca sınanır.
@@ -42,7 +43,18 @@ cargo build --locked -p macclone --features windows-physical-clone
 .\target\debug\macclone.exe --help
 ```
 
-Daha büyük GPT hedefini fiziksel yazma yapmadan modellemek için `macclone image SOURCE.raw JOB_DIR --target-bytes BYTES` kullanın. Hedef uzunluğunu bayt olarak verin. 4096 bayt mantıksal sektörlü RAW dosyası için `--sector 4096` ekleyin. Çıktı bağımsız bir imajdır. [Doğrulama kaydı](docs/VALIDATION.md)
+### Daha küçük hedef için RAW imaj
+
+Örneğin 320 GB diskte 100 GB dosya bulunabilir ve APFS bölümü yine de diskin sonuna kadar uzanabilir. MacClone, dosya doluluğu yerine GPT'deki bölüm sınırlarını ve yedek tablonun kaplayacağı alanı denetler. Bölümler zaten sığıyorsa yeni imaj ayrılmamış son alanı dışarıda bırakır, koruyucu MBR'yi günceller ve yedek GPT'yi yeni son sektöre taşır. APFS ve HFS+ bölümleri mevcut boyutlarını korur.
+
+```powershell
+macclone.exe dry-run SOURCE.raw --target-bytes 256000000000
+macclone.exe image SOURCE.raw NEW_JOB_DIR --target-bytes 256000000000
+```
+
+Örnek bayt değerini SSD’nin envanterden okunan gerçek kapasitesiyle değiştirin. `dry-run`, geçerli GPT için mevcut bölüm yerleşiminin gerektirdiği minimum kapasiteyi bildirir ve hiçbir şey yazmaz. `image` çıktısı yeni klasördeki `image.raw` dosyasıdır. 4096 bayt mantıksal sektörlü RAW kaynak için her iki komuta `--sector 4096` ekleyin. Aynı komutlar daha büyük bir GPT imajı için de kullanılabilir.
+
+Mevcut bölümler sığmıyorsa, macOS'ta desteklenen yerleşimlerde bölüm boyutunu Disk İzlencesi belirler. Dosyaları, uygulamaları ve kullanıcı hesaplarını bir macOS kurulumuna taşımak için Geçiş Yardımcısı kullanılabilir. [Apple Disk İzlencesi](https://support.apple.com/en-bn/guide/disk-utility/dskutl14027/mac) · [Apple Geçiş Yardımcısı](https://support.apple.com/guide/mac-help/transfer-information-mac-computer-device-mh27921/mac)
 
 ## Windows'ta derleme ve başlatma
 

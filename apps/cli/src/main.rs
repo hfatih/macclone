@@ -1,7 +1,7 @@
 use mc_device::{Input, invalid, open_source};
 use mc_engine::Options;
 use std::{env, io, path::Path, sync::atomic::AtomicBool};
-const USAGE: &str = "macclone list | inspect SOURCE | plan SOURCE_NUMBER TARGET_NUMBER | dry-run SOURCE | image SOURCE NEW_JOB_DIR [--recover] [--resume] [--block BYTES] [--target-bytes BYTES] | verify SOURCE SHA256\nSOURCE: image file path or disk:NUMBER:UNIQUE_ID. Use --sector 4096 for a 4Kn image. Keep recovery/block/sector settings identical on resume.";
+const USAGE: &str = "macclone list | inspect SOURCE | plan SOURCE_NUMBER TARGET_NUMBER | dry-run SOURCE [--target-bytes BYTES] | image SOURCE NEW_JOB_DIR [--recover] [--resume] [--block BYTES] [--target-bytes BYTES] | verify SOURCE SHA256\nSOURCE: image file path or disk:NUMBER:UNIQUE_ID. Use --sector 4096 for a 4Kn image. Keep recovery/block/sector/target size identical on resume.";
 fn result() -> io::Result<serde_json::Value> {
     #[cfg(all(windows, feature = "windows-physical-clone"))]
     if env::args().nth(1).as_deref() == Some("clone") {
@@ -54,9 +54,17 @@ fn result() -> io::Result<serde_json::Value> {
         }
     }
     let command = args.first().map(String::as_str).unwrap_or_default();
-    if (target_bytes.is_some() || resume) && command != "image" {
+    if resume && command != "image" {
+        return Err(invalid("--resume is only supported by image"));
+    }
+    if target_bytes.is_some() && !matches!(command, "image" | "dry-run") {
         return Err(invalid(
-            "--target-bytes and --resume are only supported by image",
+            "--target-bytes is only supported by image and dry-run",
+        ));
+    }
+    if target_bytes.is_some() && options.recovery {
+        return Err(invalid(
+            "GPT relocation requires readable source metadata and data",
         ));
     }
     if (options.recovery || block_explicit) && !matches!(command, "image" | "dry-run") {
@@ -108,9 +116,23 @@ fn result() -> io::Result<serde_json::Value> {
             Ok(serde_json::to_value(plan)?)
         }
         ["dry-run", s] => {
-            let item = open_source(&src(s)?, true)?;
+            let mut item = open_source(&src(s)?, true)?;
             options.validate(item.stamp.sector)?;
-            Ok(serde_json::json!({"source":item.stamp,"options":options,"writes":0}))
+            let mut report = serde_json::json!({"source":item.stamp,"options":options,"writes":0});
+            if let Some(bytes) = target_bytes {
+                let gpt = mc_inspect::GptRelocation::prepare(
+                    &mut item.reader,
+                    item.stamp.bytes,
+                    bytes,
+                    item.stamp.sector,
+                )?;
+                report["gpt"] = serde_json::json!({
+                    "target_bytes": gpt.target_bytes(),
+                    "minimum_target_bytes": gpt.minimum_target_bytes(),
+                    "omitted_tail_bytes": item.stamp.bytes.saturating_sub(gpt.target_bytes()),
+                });
+            }
+            Ok(report)
         }
         ["image", s, d] => {
             let mut last = std::time::Instant::now();

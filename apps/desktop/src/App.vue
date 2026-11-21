@@ -113,7 +113,7 @@ const planHint = computed(() => {
   const b = targetDisk.value
   if (!a || !b) return null
   if (a.number === b.number) return { tone: 'warning', message: 'Kaynak ve hedef için farklı diskler seçin.' }
-  if (a.bytes > b.bytes) return { tone: 'warning', message: 'Hedef disk kaynaktan küçük.' }
+  if (a.bytes > b.bytes) return { tone: 'warning', message: 'Hedef tam disk kopyası için küçük. Küçük bir RAW imaj oluşturmak için mevcut GPT bölümlerinin hedefe sığması gerekir.' }
   if (a.logical !== b.logical) return { tone: 'warning', message: 'Disklerin mantıksal sektör boyutları farklı.' }
   if (a.bytes < b.bytes) return { tone: 'neutral', message: 'Büyük hedef için sağlam bir GPT ve ayrı bir GPT taşıma onayı gerekir.' }
   return { tone: 'neutral', message: 'Eşit kapasitede tam disk kopyası planlanır.' }

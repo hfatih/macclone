@@ -81,3 +81,9 @@ Windows x64 çapraz derleme ve Clippy geçti. Masaüstü için `npm run lint` ve
 - Chromium'da sentetik Tauri yanıtlarıyla SSD → HDD ve HDD → SSD planları, aynı disk engeli, envanter yenileme, aynı numaradaki aygıtın değişmesi ve geciken plan veya bölüm tablosu sonuçları sınandı.
 - Klavyeden SHA-256 isteği, işlem başlayana kadar yinelenen gönderimin engellenmesi, eski durum bildirimleri, iptal hatasından sonra yeniden deneme, kısmi kurtarma ve imaj özetinin panoya kopyalanması sınandı.
 - 1140 ve 820 piksel pencere genişliklerinde ana görünüm, 390 ve 375 piksel genişliklerde tablo ve plan formu denetlendi. Gerçek Windows WebView2 ve fiziksel aygıt kullanımı bu aşamada yürütülmedi.
+
+## Küçük GPT RAW hedefi
+
+- 56 Rust testi, Linux ve Windows x64 Clippy, Windows x64 CLI ve masaüstü çapraz derlemesi, ESLint ve Vite derlemesi geçti.
+- 512 ve 4096 bayt sektörlü CLI senaryolarında imaj, GPT'nin izin verdiği en küçük hedefe yazıldı. Bölüm verileri, bölüm tablosu, iki başlığın CRC'si ve geri okuma SHA-256 değeri bağımsız doğrulandı. Bir sektör daha küçük hedef iş klasörü açmadan reddedildi. Aynı hedef boyutunda devam başarılı oldu, farklı boyut reddedildi. Eşit boyutlu imajlar sabit `partition-manager` çıktısıyla eşleşti.
+- Mantıksal olarak 320 GB olan sentetik seyrek RAW dosyasında, son bölüm 250 GB konumunda bitiyorsa 256 GB ön denetimi geçti. Son bölüm 300 GB konumunda bitiyorsa ön denetim gereken minimum kapasiteyi bildirerek durdu. Denetim fiziksel aygıt kullanmadı.

@@ -80,9 +80,39 @@ with tempfile.TemporaryDirectory() as root:
             assert not target_layout['warnings']
             assert expanded == cli('image', src, larger, *settings, '--target-bytes', size, '--resume')
             cli('image', src, larger, *settings, '--target-bytes', size+sector, '--resume', success=False)
+        source_last = struct.unpack_from('<Q', raw, sector+48)[0]
+        partition_last = max(p['end_lba'] for p in layout['partitions'])
+        minimum = len(raw) - (source_last - partition_last) * sector
         small = folder/'smaller'
-        cli('image', src, small, *settings, '--target-bytes', len(raw)-sector, success=False)
+        preview = cli('dry-run', src, *settings, '--target-bytes', minimum)
+        assert preview['writes'] == 0 and preview['gpt'] == {
+            'target_bytes': minimum,
+            'minimum_target_bytes': minimum,
+            'omitted_tail_bytes': len(raw) - minimum,
+        }
         assert not small.exists()
+        shrunk = cli('image', src, small, *settings, '--target-bytes', minimum)
+        result = (small/'image.raw').read_bytes()
+        new_backup = old_backup - (len(raw)-minimum)
+        assert len(result) == minimum == shrunk['target_reread_bytes']
+        assert result[sector*2:new_backup] == raw[sector*2:new_backup]
+        assert result[new_backup:-sector] == raw[old_backup:-sector]
+        assert struct.unpack_from('<I', result, 458)[0] == minimum // sector - 1
+        assert struct.unpack_from('<Q', result, sector+48)[0] == partition_last
+        for offset in (sector, minimum-sector):
+            header = bytearray(result[offset:offset+92])
+            checksum = struct.unpack_from('<I', header, 16)[0]
+            header[16:20] = bytes(4)
+            assert zlib.crc32(header) == checksum
+        assert cli('inspect', small/'image.raw', *settings) == layout
+        assert shrunk['sha256'] == hashlib.sha256(result).hexdigest()
+        assert shrunk == cli('image', src, small, *settings, '--target-bytes', minimum, '--resume')
+        cli('image', src, small, *settings, '--target-bytes', minimum+sector, '--resume', success=False)
+        too_small = folder/'too-small'
+        cli('dry-run', src, *settings, '--target-bytes', minimum-sector, success=False)
+        cli('image', src, too_small, *settings, '--target-bytes', minimum-sector, success=False)
+        cli('image', src, too_small, *settings, '--recover', '--target-bytes', minimum, success=False)
+        assert not too_small.exists()
         hybrid = folder/'hybrid.raw'
         hybrid_data = raw[:]
         hybrid_data[466] = 0xaf
@@ -118,4 +148,4 @@ with tempfile.TemporaryDirectory() as root:
         raw[-sector+16] ^= 1
         src.write_bytes(raw)
         cli('inspect', src, *settings, success=False)
-        print(f'{sector} B: GPT/EFI/APFS, dry-run, full clone, SHA-256, resume, refusal, larger GPT relocation and backup CRC checks passed')
+        print(f'{sector} B: GPT/EFI/APFS, dry-run, full clone, SHA-256, resume, refusal, larger and smaller GPT relocation and backup CRC checks passed')

@@ -32,7 +32,7 @@ Vue → typed Tauri commands → application service ← CLI
 | Boot/system/cluster, açık volume veya belirlenemeyen kritik bilgi | Fiziksel yazma reddedilir. Sistem, EFI ve Windows farklı disklerde olabilir. Disk 0 varsayımı kullanılamaz. |
 | Kaynak canlı ve değişebilir | Tutarlı fiziksel kopya için kaynak önceden çevrimdışı olmalı. Uygulama volume bağlama, ayırma veya format işlemi yapmaz. |
 | 512e → 4Kn veya 4Kn → 512 | Ham fiziksel aktarım reddedilir. LBA ve GPT anlamı değişir. 512n → 512e için mantıksal boy eşit olsa da fiziksel hizalama denetlenir. |
-| Hedef küçük | Kullanılan alan sığsa bile son kaynak baytı korunamaz. Reddedilir. |
+| Hedef küçük | Fiziksel klon engellenir. CLI RAW imajında açık hedef boyutu verilirse doğrulanmış GPT bölümlerinin tümü ve yedek tablo mevcut bölüm adresleriyle hedefe sığmalıdır. |
 | Hedef büyük | Açık GPT taşıma onayı gerekir. İki GPT kopyası denetlenir. Koruyucu MBR ve başlıklar güncellenir, eski yedek metadata ve yeni boş alan sıfırlanır. Bölüm sınırları ve kimlikleri korunur. |
 | Hasarlı GPT / bilinmeyen FS | İnceleme kısmi veya hatalı olarak görünür. Kaynak değişmeden imajlanabilir. |
 | Okunamayan sektör | Normal aktarım durur. Kurtarma modunda sektör denemesi, açıkça kayıtlı sıfır dolgu ve eksik sonuç. Sıfır dolgunun hash'i kaynak sektörün hash'i değildir. |
@@ -110,8 +110,10 @@ Uygulanmış sınırlar ve komutlar README dosyasında yer alır. Buradaki fizik
 Başarı ölçüleri: aradaki boşluklara yazılan sentineller dahil kaynak aralığının tam eşitliği; başlangıçta ve resume sonunda kaynak hash'inin değişmemesi; iptalin kalıcı son parçayı aşmaması; hedef veya günlük flush hatasında başarı raporunun üretilmemesi; tek sektörü kayıp bir işte doğrulanmış kaynak kapsamının tam bir mantıksal sektör eksilmesi. Yerel testten geçen bu motorun fiziksel restore yetkisi, Windows VHDX ve hot-plug kabul deneylerinden bağımsız olarak açılamaz.
 
 
-## Büyük GPT hedefi
+## GPT hedef boyutu
 
 `mc-inspect::GptRelocation` salt okunur beklenen hedef akışını oluşturur. Koruyucu MBR ve iki geçerli GPT kopyası, aynı bölüm dizisi, geçerli bölüm aralıkları ve GPT yedeğinin kaynak sonundaki konumu şarttır. Hibrit MBR, kayıp kopya, çakışan bölümler veya hizasız hedef reddedilir. Akış aynı veri bloklarını taşır ve yalnızca GPT/MBR metadata dönüşümlerini ve sıfır aralıklarını uygular. Eski yedek GPT ile yeni yedek alanın çakıştığı tek sektör büyüme de desteklenir.
 
-Günlük eski kaynak boyutunu ve büyük hedef boyutunu birlikte saklar. Devam sırasında GPT beklenen akışı aynı kaynaktan yeniden hazırlanır. Rapor, GPT taşınmışsa kaynak boyutunu `gpt_relocated_from_bytes` alanıyla bildirir. Bu modda `verified_bytes` dönüştürülmüş hedef içeriğinin doğrulanan uzunluğudur. Bölüm içi dosya sistemi kapsamı ve bölüm konumu aynı kalır. Tam eşit boyutta eski RAW sözleşmesi geçerlidir.
+Küçük hedef için gerekli minimum bayt sayısı, son GPT bölümünün bitişi ve korunacak yedek GPT yerleşiminden hesaplanır. Hedef bu sınırın altındaysa iş klasörü açılmadan hata verilir. Sığıyorsa RAW imaj akışı ayrılmamış son alanı dışarıda bırakır. Dosya sistemi yeniden boyutlandırma ve küçük fiziksel hedefe yazma bu akışın kapsamı dışındadır.
+
+Günlük kaynak ve hedef boyutlarını birlikte saklar. Devam sırasında GPT beklenen akışı aynı kaynaktan yeniden hazırlanır. Rapor, GPT taşınmışsa kaynak boyutunu `gpt_relocated_from_bytes` alanıyla bildirir. Bu modda `verified_bytes` dönüştürülmüş hedef içeriğinin doğrulanan uzunluğudur. Bölüm içi dosya sistemi kapsamı ve bölüm konumu aynı kalır. Tam eşit boyutta eski RAW sözleşmesi geçerlidir.
