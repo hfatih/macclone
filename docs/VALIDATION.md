@@ -74,3 +74,10 @@ Windows x64 çapraz derleme ve Clippy geçti. Masaüstü için `npm run lint` ve
 - Linux üzerinde 512 bayt bloklarla 4 MiB RAW kopyalayan ayrı CLI süreci ortada zorla sonlandırıldı. Tamamlanma raporu oluşmadığı doğrulandı. Aynı işte `--resume` çalıştırıldığında hedefin 4.194.304 baytı kaynakla eşleşti ve SHA-256 bağımsız olarak doğrulandı.
 - 512 ve 4096 bayt sektörlü uçtan uca CLI senaryoları geçti. Eşit boyutlu imajlar `partition-manager` çıktısıyla bayt bayt aynıydı. Büyük GPT hedefi, yedek GPT CRC'si ve geçersiz hedefleri reddetme kontrolleri de geçti.
 - Windows x64 CLI ve masaüstü çapraz derlendi. Ham okuma akışı çevrimdışı disk durumunu işlem sırasında ve son kaynak denetiminde sorgular. Gerçek Windows üzerinde USB çıkarıp takma, HDD/SSD aktarımı, çevrimdışı aygıt sürücüsü davranışı ve macOS açılışı çalışma zamanı doğrulaması bekliyor.
+
+## Starlit masaüstü arayüzü
+
+- ESLint, Vue tür denetimi ve Vite üretim derlemesi geçti. Linux üzerinde 56 Rust testi geçti. Windows x64 masaüstü için Clippy ve gömülü web varlıklarıyla çapraz derleme geçti.
+- Chromium'da sentetik Tauri yanıtlarıyla SSD → HDD ve HDD → SSD planları, aynı disk engeli, envanter yenileme, aynı numaradaki aygıtın değişmesi ve geciken plan veya bölüm tablosu sonuçları sınandı.
+- Klavyeden SHA-256 isteği, işlem başlayana kadar yinelenen gönderimin engellenmesi, eski durum bildirimleri, iptal hatasından sonra yeniden deneme, kısmi kurtarma ve imaj özetinin panoya kopyalanması sınandı.
+- 1140 ve 820 piksel pencere genişliklerinde ana görünüm, 390 ve 375 piksel genişliklerde tablo ve plan formu denetlendi. Gerçek Windows WebView2 ve fiziksel aygıt kullanımı bu aşamada yürütülmedi.

@@ -3,6 +3,7 @@ use mc_device::{Disk, Input, open_source};
 use mc_engine::{Options, Progress, Report};
 use serde::{Deserialize, Serialize};
 use std::{
+    io,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -14,11 +15,33 @@ type Api<T> = Result<T, String>;
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
+#[derive(Clone, Copy, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum Outcome {
+    #[default]
+    Idle,
+    Running,
+    Completed,
+    Partial,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Operation {
+    Image,
+    Recovery,
+    Verify,
+}
+
 #[derive(Clone, Serialize, Default)]
 struct Status {
     id: u64,
     revision: u64,
     running: bool,
+    outcome: Outcome,
+    operation: Option<Operation>,
     progress: Progress,
     report: Option<Report>,
     message: Option<String>,
@@ -82,9 +105,11 @@ fn cancel_operation(state: State<'_, Mutex<Jobs>>, id: u64) -> Api<()> {
     jobs.cancel.store(true, Ordering::Relaxed);
     Ok(())
 }
-fn job<F>(app: AppHandle, f: F) -> Api<u64>
+fn job<F>(app: AppHandle, operation: Operation, f: F) -> Api<u64>
 where
-    F: FnOnce(&AtomicBool, &dyn Fn(Progress)) -> Api<(Option<Report>, String)> + Send + 'static,
+    F: FnOnce(&AtomicBool, &dyn Fn(Progress)) -> io::Result<(Option<Report>, String)>
+        + Send
+        + 'static,
 {
     let handle = app.state::<Mutex<Jobs>>();
     let mut jobs = handle.lock().map_err(err)?;
@@ -97,9 +122,13 @@ where
     jobs.record = Status {
         id,
         running: true,
+        outcome: Outcome::Running,
+        operation: Some(operation),
         ..Status::default()
     };
+    let initial = jobs.record.clone();
     drop(jobs);
+    let _ = app.emit("operation", initial);
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<Jobs>>();
         let publish = Mutex::new(std::time::Instant::now());
@@ -121,11 +150,29 @@ where
             j.record.running = false;
             match res {
                 Ok(Ok((r, msg))) => {
+                    j.record.outcome =
+                        if r.as_ref().is_some_and(|report| report.outcome == "partial") {
+                            Outcome::Partial
+                        } else {
+                            Outcome::Completed
+                        };
                     j.record.report = r;
-                    j.record.message = Some(msg)
+                    j.record.message = Some(msg);
                 }
-                Ok(Err(e)) => j.record.message = Some(e),
-                Err(_) => j.record.message = Some("Worker stopped unexpectedly".into()),
+                Ok(Err(e))
+                    if e.kind() == io::ErrorKind::Interrupted && cancel.load(Ordering::Relaxed) =>
+                {
+                    j.record.outcome = Outcome::Cancelled;
+                    j.record.message = Some("İşlem güvenli bir noktada durduruldu.".into());
+                }
+                Ok(Err(e)) => {
+                    j.record.outcome = Outcome::Failed;
+                    j.record.message = Some(e.to_string());
+                }
+                Err(_) => {
+                    j.record.outcome = Outcome::Failed;
+                    j.record.message = Some("İşlem beklenmedik şekilde durdu.".into());
+                }
             }
             let _ = app.emit("operation", &j.record);
         }
@@ -134,7 +181,12 @@ where
 }
 #[tauri::command]
 fn create_image(app: AppHandle, request: Request) -> Api<u64> {
-    job(app, move |c, p| {
+    let operation = if request.options.recovery {
+        Operation::Recovery
+    } else {
+        Operation::Image
+    };
+    job(app, operation, move |c, p| {
         let r = mc_engine::run(
             &request.input,
             &request.directory,
@@ -142,14 +194,13 @@ fn create_image(app: AppHandle, request: Request) -> Api<u64> {
             request.resume,
             c,
             p,
-        )
-        .map_err(err)?;
+        )?;
         Ok((Some(r), "İmaj raporu iş klasörüne kaydedildi.".into()))
     })
 }
 #[tauri::command]
 fn verify_image(app: AppHandle, input: Input, expected: String) -> Api<u64> {
-    job(app, move |c, p| {
+    job(app, Operation::Verify, move |c, p| {
         let hash = mc_engine::verify_with_total(&input, &expected, c, |bytes, total| {
             p(Progress {
                 phase: "verify".into(),
@@ -157,8 +208,7 @@ fn verify_image(app: AppHandle, input: Input, expected: String) -> Api<u64> {
                 total,
                 missing_sectors: 0,
             })
-        })
-        .map_err(err)?;
+        })?;
         Ok((None, format!("SHA-256 eşleşti · {hash}")))
     })
 }

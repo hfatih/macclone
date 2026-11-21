@@ -1,168 +1,573 @@
 <script setup lang="ts">
-import {computed,onMounted,onUnmounted,ref,watch} from 'vue'
-import {listen} from '@tauri-apps/api/event'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { listen } from '@tauri-apps/api/event'
+import {
+  Activity, ArrowLeftRight, ArrowRight, ArrowUpRight, CircleAlert, CircleCheck,
+  ClipboardList, Database, FileArchive, HardDrive, LayoutDashboard, LifeBuoy,
+  RefreshCw, ScanSearch, Settings2, ShieldCheck,
+} from '@lucide/vue'
 import logo from '../src-tauri/icons/icon.png'
-import {api,type Disk,type Input,type Layout,type Status} from './api'
-const tabs=['Genel bakış','Diskler','Klon planı','Disk imajı','Kurtarma','Dosya sistemi','Doğrulama','Günlük','Ayarlar'] as const
-type Tab=typeof tabs[number]
-const page=ref<Tab>('Genel bakış'),disks=ref<Disk[]>([]),inventoryError=ref(''),error=ref(''),loading=ref(false)
-const mode=ref<'image'|'disk'>('image'),path=ref(''),selected=ref<number|null>(null),target=ref<number|null>(null),directory=ref(''),expected=ref(''),resume=ref(false)
-const sector=ref(512),block=ref(1048576),layout=ref<Layout|null>(null),reasons=ref<string[]>([]),status=ref<Status|null>(null),activity=ref<string[]>([])
-const disk=computed(()=>disks.value.find(d=>d.number===selected.value))
-const subject=computed<Input|null>(()=>mode.value==='image'?(path.value.trim()?{kind:'image',path:path.value.trim(),sector:sector.value}:null):disk.value?.id?{kind:'disk',number:disk.value.number,id:disk.value.id}:null)
-const busy=computed(()=>loading.value||status.value?.running)
-const sourcePages:readonly Tab[]=['Disk imajı','Kurtarma','Dosya sistemi','Doğrulama']
-const pct=computed(()=>{const p=status.value?.progress;return p?.total?Math.floor(100*p.bytes/p.total):0})
-const speed=ref(0)
-let selectionRevision=0
-let inventoryRevision=0
-let pendingStatus=false
-let unlisten:(()=>void)|undefined, timer:ReturnType<typeof setInterval>|undefined, previous:{id:number;phase:string;bytes:number;time:number}|undefined
-const fmt=(n:number)=>new Intl.NumberFormat('tr-TR',{maximumFractionDigits:1}).format(n/2**30)+' GiB'
-const seen=(v:boolean|null)=>v==null?'Bilinmiyor':v?'Evet':'Hayır'
-function log(text:string){activity.value=[new Date().toLocaleTimeString('tr-TR')+'  '+text,...activity.value].slice(0,80)}
-function apply(s:Status){
- const current=status.value
- if(current&&(s.id<current.id||(s.id===current.id&&s.revision<=current.revision)))return
- const time=performance.now(),p=s.progress
- if(previous?.id===s.id && previous.phase===p.phase && p.bytes>previous.bytes && time>previous.time){speed.value=(p.bytes-previous.bytes)*1000/(time-previous.time)}
- else if(previous?.phase!==p.phase || previous.id!==s.id){speed.value=0}
- if(previous?.bytes!==p.bytes||previous?.phase!==p.phase||previous?.id!==s.id)previous={id:s.id,phase:p.phase,bytes:p.bytes,time}
- if(s.message && (status.value?.message!==s.message || status.value.id!==s.id))log(s.message)
- status.value=s
+import { api, type Disk, type Input, type Layout, type Status } from './api'
+import { diskLabel, formatBytes, outcomeLabel } from './ui'
+import DeviceTable from './DeviceTable.vue'
+import OperationPanel from './OperationPanel.vue'
+
+const navigation = [
+  { label: 'Çalışma alanı', items: [
+    { id: 'overview', title: 'Genel bakış', icon: LayoutDashboard },
+    { id: 'disks', title: 'Diskler', icon: HardDrive },
+  ] },
+  { label: 'Disk işlemleri', items: [
+    { id: 'plan', title: 'Klon planı', icon: ArrowLeftRight },
+    { id: 'image', title: 'Disk imajı', icon: FileArchive },
+    { id: 'recovery', title: 'Kurtarma', icon: LifeBuoy },
+    { id: 'inspect', title: 'Dosya sistemi', icon: ScanSearch },
+    { id: 'verify', title: 'Doğrulama', icon: ShieldCheck },
+  ] },
+  { label: 'Uygulama', items: [
+    { id: 'logs', title: 'Günlük', icon: ClipboardList },
+    { id: 'settings', title: 'Ayarlar', icon: Settings2 },
+  ] },
+] as const
+type Page = typeof navigation[number]['items'][number]['id']
+
+const descriptions: Record<Page, string> = {
+  overview: 'Bağlı diskleri, kopyalama planlarını ve son işlemi tek yerden takip edin.',
+  disks: 'Aygıt kimliğini, bağlantı türünü ve sektör boyutlarını kontrol edin.',
+  plan: 'HDD ve SSD arasında kopyalamadan önce iki diskin uyumluluğunu denetleyin.',
+  image: 'Bir diski veya RAW dosyasını yeni bir çalışma klasörüne kopyalayın.',
+  recovery: 'Sorunlu kaynaktan RAW imaj alın ve okunamayan sektörleri kaydedin.',
+  inspect: 'GPT, MBR ve bölüm imzalarını kaynağa yazmadan inceleyin.',
+  verify: 'Kaynağı yeniden okuyup SHA-256 özetini beklenen değerle karşılaştırın.',
+  logs: 'Bu oturumda oluşan işlem sonuçlarını ve hataları inceleyin.',
+  settings: 'RAW dosya geometrisini ve kopyalama blok boyutunu ayarlayın.',
 }
-function isSameDisk(previous:Disk|undefined, next:Disk|undefined){
- return !!previous?.id&&!!next&&previous.id===next.id&&previous.serial===next.serial
-}
-async function refresh(){
- const run=++inventoryRevision
- inventoryError.value=''
- try{
-   const found=await api.disks()
-   if(run!==inventoryRevision)return
-   if(selected.value!==null&&!isSameDisk(disk.value,found.find(d=>d.number===selected.value)))selected.value=null
-   if(target.value!==null&&!isSameDisk(selectedTarget.value,found.find(d=>d.number===target.value)))target.value=null
-   disks.value=found
- }catch(e){
-   if(run!==inventoryRevision)return
-   inventoryError.value=String(e)
-   selected.value=null
-   target.value=null
-   disks.value=[]
- }
-}
-async function act(f:()=>Promise<void>){
- if(loading.value)return
- const version=selectionRevision
- error.value=''
- loading.value=true
- try{await f()}catch(e){
-   if(version===selectionRevision)error.value=String(e)
-   log(String(e))
- }finally{loading.value=false}
-}
-async function start(){
- const input=subject.value
- if(!input)return
- const version=selectionRevision
- await act(async()=>{
-   if(page.value==='Dosya sistemi'){
-     const result=await api.inspect(input)
-     if(version===selectionRevision)layout.value=result
-     return
-   }
-   if(page.value==='Doğrulama')await api.verify(input,expected.value.trim())
-   else await api.image(input,directory.value,block.value,page.value==='Kurtarma',resume.value)
-   apply(await api.status())
- })
-}
-const selectedTarget=computed(()=>disks.value.find(d=>d.number===target.value))
-const layoutMode=computed(()=>{
- if(!disk.value||!selectedTarget.value)return undefined
- if(disk.value.bytes>selectedTarget.value.bytes)return 'smaller'
- if(disk.value.logical!==selectedTarget.value.logical)return 'sector'
- return disk.value.bytes===selectedTarget.value.bytes?'exact':'gpt'
+
+const page = ref<Page>('overview')
+const heading = ref<HTMLElement>()
+const disks = ref<Disk[]>([])
+const inventoryError = ref('')
+const inventoryLoading = ref(true)
+const statusError = ref('')
+const cancelError = ref('')
+const actionError = ref('')
+const action = ref<'inspect' | 'plan' | 'image' | 'verify' | null>(null)
+const activity = ref<{ timestamp: string; message: string }[]>([])
+const mode = ref<'image' | 'disk'>('image')
+const path = ref('')
+const directory = ref('')
+const expected = ref('')
+const selected = ref<number | null>(null)
+const target = ref<number | null>(null)
+const resume = ref(false)
+const sector = ref(512)
+const block = ref(1048576)
+const layout = ref<Layout | null>(null)
+const planErrors = ref<string[] | null>(null)
+const status = ref<Status | null>(null)
+const startingId = ref<number | null>(null)
+const stoppingId = ref<number | null>(null)
+const speed = ref(0)
+
+let selectionRevision = 0
+let inventoryRevision = 0
+let pendingStatus = false
+let disposed = false
+let unlisten: (() => void) | undefined
+let timer: ReturnType<typeof setInterval> | undefined
+let sample: { id: number; phase: string; bytes: number; time: number } | undefined
+
+type NavItem = typeof navigation[number]['items'][number]
+const navItems = navigation.flatMap<NavItem>(group => group.items)
+const title = computed(() => navItems.find(item => item.id === page.value)?.title)
+const sourceDisk = computed(() => disks.value.find(disk => disk.number === selected.value))
+const targetDisk = computed(() => disks.value.find(disk => disk.number === target.value))
+const totalCapacity = computed(() => disks.value.reduce((total, disk) => total + disk.bytes, 0))
+const overview = computed(() => page.value === 'overview' || page.value === 'disks')
+const imagePage = computed(() => page.value === 'image' || page.value === 'recovery')
+const sourcePage = computed(() => imagePage.value || page.value === 'inspect' || page.value === 'verify')
+const canRefresh = computed(() => overview.value || page.value === 'plan' || (sourcePage.value && mode.value === 'disk'))
+const busy = computed(() => Boolean(action.value || status.value?.running || startingId.value !== null))
+const stopping = computed(() => stoppingId.value !== null && status.value?.id === stoppingId.value)
+const validDigest = computed(() => /^[a-f0-9]{64}$/i.test(expected.value.trim()))
+const invalidDigest = computed(() => Boolean(expected.value.trim()) && !validDigest.value)
+const subject = computed<Input | null>(() => {
+  if (mode.value === 'image') {
+    return path.value.trim() ? { kind: 'image', path: path.value.trim(), sector: sector.value } : null
+  }
+  const disk = sourceDisk.value
+  return disk?.id ? { kind: 'disk', number: disk.number, id: disk.id } : null
 })
-function reverseDirection(){
- const source=selected.value
- selected.value=target.value
- target.value=source
-}
-const planChecked=ref(false)
-async function plan(){
- const source=disks.value.find(d=>d.number===selected.value)
- const destination=selectedTarget.value
- const version=selectionRevision
- if(!source||!destination)return
- reasons.value=[]
- planChecked.value=false
- await act(async()=>{
-   const blockers=await api.plan(source,destination)
-   if(version===selectionRevision){
-     reasons.value=blockers
-     planChecked.value=true
-   }
- })
-}
-function inspectDisk(d:Disk){if(busy.value)return;selected.value=d.number;mode.value='disk';page.value='Dosya sistemi';void start()}
-watch([page,selected,target,path,sector,mode,disks],()=>{
- selectionRevision++
- error.value=''
- layout.value=null
- reasons.value=[]
- planChecked.value=false
-},{flush:'sync'})
-async function pollStatus(){
- if(pendingStatus)return
- pendingStatus=true
- try{apply(await api.status())}catch(e){error.value=String(e)}finally{pendingStatus=false}
-}
-onMounted(()=>{
- timer=setInterval(()=>{void pollStatus()},1500)
- void listen<Status>('operation',e=>apply(e.payload)).then(remove=>{unlisten=remove}).catch(e=>log(String(e)))
- void pollStatus()
- void refresh()
+const canStart = computed(() => {
+  if (!subject.value || busy.value || (mode.value === 'disk' && inventoryLoading.value)) return false
+  if (imagePage.value) {
+    return Boolean(directory.value.trim()) && (mode.value !== 'disk' || sourceDisk.value?.offline === true)
+  }
+  if (page.value === 'verify') {
+    return validDigest.value && (mode.value !== 'disk' || sourceDisk.value?.offline === true)
+  }
+  return page.value === 'inspect'
 })
-onUnmounted(()=>{unlisten?.();clearInterval(timer)})
+const planHint = computed(() => {
+  const a = sourceDisk.value
+  const b = targetDisk.value
+  if (!a || !b) return null
+  if (a.number === b.number) return { tone: 'warning', message: 'Kaynak ve hedef için farklı diskler seçin.' }
+  if (a.bytes > b.bytes) return { tone: 'warning', message: 'Hedef disk kaynaktan küçük.' }
+  if (a.logical !== b.logical) return { tone: 'warning', message: 'Disklerin mantıksal sektör boyutları farklı.' }
+  if (a.bytes < b.bytes) return { tone: 'neutral', message: 'Büyük hedef için sağlam bir GPT ve ayrı bir GPT taşıma onayı gerekir.' }
+  return { tone: 'neutral', message: 'Eşit kapasitede tam disk kopyası planlanır.' }
+})
+const canPlan = computed(() =>
+  !busy.value && !inventoryLoading.value && Boolean(sourceDisk.value?.id && targetDisk.value?.id)
+  && sourceDisk.value?.number !== targetDisk.value?.number,
+)
+const startLabel = computed(() => {
+  if (action.value === 'inspect') return 'İnceleniyor…'
+  if (action.value === 'verify' || action.value === 'image' || startingId.value !== null) return 'Hazırlanıyor…'
+  if (page.value === 'verify') return 'İçeriği doğrula'
+  if (page.value === 'inspect') return 'Bölüm tablosunu incele'
+  return resume.value ? 'İşe devam et' : 'İmaj al'
+})
+
+async function navigate(destination: Page) {
+  if (page.value === destination) return
+  page.value = destination
+  await nextTick()
+  heading.value?.focus()
+}
+
+function log(message: string) {
+  const entry = { timestamp: new Date().toLocaleTimeString('tr-TR'), message }
+  activity.value = [entry, ...activity.value].slice(0, 80)
+}
+
+function apply(next: Status) {
+  const previous = status.value
+  if (previous && (next.id < previous.id || (next.id === previous.id && next.revision <= previous.revision))) return
+  const now = performance.now()
+  const progress = next.progress
+  if (sample?.id !== next.id || sample.phase !== progress.phase) {
+    speed.value = 0
+    sample = { id: next.id, phase: progress.phase, bytes: progress.bytes, time: now }
+  } else if (progress.bytes > sample.bytes && now > sample.time) {
+    speed.value = (progress.bytes - sample.bytes) * 1000 / (now - sample.time)
+    sample = { id: next.id, phase: progress.phase, bytes: progress.bytes, time: now }
+  }
+  if (stoppingId.value !== null && (next.id !== stoppingId.value || !next.running)) stoppingId.value = null
+  if (startingId.value !== null && next.id >= startingId.value) startingId.value = null
+  if (next.id !== previous?.id || !next.running) cancelError.value = ''
+  if (next.message && (previous?.message !== next.message || previous.id !== next.id)) log(next.message)
+  status.value = next
+}
+
+function isSameDisk(previous: Disk | undefined, next: Disk | undefined) {
+  return Boolean(previous?.id && next && previous.id === next.id && previous.serial === next.serial)
+}
+
+async function refresh() {
+  const run = ++inventoryRevision
+  inventoryLoading.value = true
+  inventoryError.value = ''
+  try {
+    const found = await api.disks()
+    if (run !== inventoryRevision || disposed) return
+    if (selected.value !== null && !isSameDisk(sourceDisk.value, found.find(d => d.number === selected.value))) selected.value = null
+    if (target.value !== null && !isSameDisk(targetDisk.value, found.find(d => d.number === target.value))) target.value = null
+    disks.value = found
+  } catch (error) {
+    if (run !== inventoryRevision || disposed) return
+    inventoryError.value = String(error)
+    selected.value = null
+    target.value = null
+    disks.value = []
+  } finally {
+    if (run === inventoryRevision && !disposed) inventoryLoading.value = false
+  }
+}
+
+async function act(kind: NonNullable<typeof action.value>, request: () => Promise<void>) {
+  if (action.value) return
+  const revision = selectionRevision
+  actionError.value = ''
+  action.value = kind
+  try {
+    await request()
+  } catch (error) {
+    if (revision === selectionRevision) actionError.value = String(error)
+    log(String(error))
+  } finally {
+    action.value = null
+  }
+}
+
+async function start() {
+  const input = subject.value
+  if (!input || !canStart.value) return
+  const current = page.value
+  const revision = selectionRevision
+  if (current === 'inspect') {
+    layout.value = null
+    await act('inspect', async () => {
+      const result = await api.inspect(input)
+      if (revision === selectionRevision) layout.value = result
+    })
+    return
+  }
+  await act(current === 'verify' ? 'verify' : 'image', async () => {
+    const id = current === 'verify'
+      ? await api.verify(input, expected.value.trim())
+      : await api.image(input, directory.value.trim(), block.value, current === 'recovery', resume.value)
+    if ((status.value?.id ?? 0) < id) startingId.value = id
+    await pollStatus()
+  })
+}
+
+async function checkPlan() {
+  const source = sourceDisk.value
+  const destination = targetDisk.value
+  if (!source || !destination || !canPlan.value) return
+  const revision = selectionRevision
+  planErrors.value = null
+  await act('plan', async () => {
+    const blockers = await api.plan(source, destination)
+    if (revision === selectionRevision) planErrors.value = blockers
+  })
+}
+
+function reverseDirection() {
+  const source = selected.value
+  selected.value = target.value
+  target.value = source
+}
+
+async function inspectDisk(disk: Disk) {
+  if (busy.value) return
+  selected.value = disk.number
+  mode.value = 'disk'
+  await navigate('inspect')
+  await start()
+}
+
+async function cancelOperation() {
+  const current = status.value
+  if (!current?.running || stopping.value) return
+  stoppingId.value = current.id
+  cancelError.value = ''
+  try {
+    await api.cancel(current.id)
+  } catch (error) {
+    await pollStatus()
+    if (status.value?.id === current.id && status.value.running) cancelError.value = String(error)
+    if (stoppingId.value === current.id) stoppingId.value = null
+  }
+}
+
+watch([page, selected, target, path, sector, mode, disks], () => {
+  selectionRevision++
+  actionError.value = ''
+  layout.value = null
+  planErrors.value = null
+}, { flush: 'sync' })
+
+async function pollStatus() {
+  if (pendingStatus || disposed) return
+  pendingStatus = true
+  try {
+    const latest = await api.status()
+    if (disposed) return
+    statusError.value = ''
+    apply(latest)
+  } catch (error) {
+    if (!disposed) statusError.value = String(error)
+  } finally {
+    pendingStatus = false
+  }
+}
+
+onMounted(() => {
+  timer = setInterval(() => { void pollStatus() }, 1500)
+  void listen<Status>('operation', ({ payload }) => {
+    if (disposed) return
+    statusError.value = ''
+    apply(payload)
+  }).then(remove => {
+    if (disposed) remove()
+    else unlisten = remove
+  }).catch(error => {
+    if (!disposed) log(String(error))
+  })
+  void pollStatus()
+  void refresh()
+})
+
+onUnmounted(() => {
+  disposed = true
+  unlisten?.()
+  clearInterval(timer)
+})
 </script>
+
 <template>
-<div class="shell">
- <aside><div class="brand"><img class="mark" :src="logo" alt=""> MacClone</div><nav><button v-for="t in tabs" :key="t" :class="{active:page===t}" @click="page=t">{{t}}</button></nav><small>Starlit Studios tarafından geliştirilmiştir</small></aside>
- <main><header><h1>{{page}}</h1><button v-if="page==='Genel bakış'||page==='Diskler'" @click="refresh">Diskleri yenile</button></header>
- <p v-if="error" role="alert" class="notice">{{error}}</p>
- <template v-if="page==='Genel bakış'||page==='Diskler'">
- <div v-if="page==='Genel bakış'" class="cards"><section><label>Fiziksel diskler</label><strong>{{inventoryError?'—':disks.length}}</strong></section><section><label>Geçerli işlem</label><strong>{{status?.running?'Çalışıyor':'Beklemede'}}</strong></section></div>
- <p v-if="inventoryError" class="notice">{{inventoryError}}</p>
- <section><h2>Disk envanteri</h2><p v-if="!disks.length&&!inventoryError">Depolama sağlayıcısı henüz disk bildirmedi.</p>
- <article v-for="d in disks" :key="d.number"><div><h3>{{d.model}} <small>Disk {{d.number}}</small></h3><p>{{fmt(d.bytes)}} · {{d.bus}} · {{d.health||'Sağlık bilinmiyor'}}</p>
- <p>Seri {{d.serial||'bilinmiyor'}} · Sektör {{d.logical}} / {{d.physical}} B · Salt okunur {{seen(d.readonly)}}</p><p>Sistem {{seen(d.system)}} · Önyükleme {{seen(d.boot)}} · Çevrimdışı {{seen(d.offline)}}</p></div><button :disabled="busy||!d.id" @click="inspectDisk(d)">İncele</button></article>
- </section><div class="actions"><button class="primary" @click="page='Disk imajı'">RAW imaj al</button><button @click="page='Klon planı'">Klon planı oluştur</button></div></template>
- <section v-if="page==='Klon planı'"><h2>Fiziksel disk uyumluluğu</h2><p>HDD → SSD ve SSD → HDD için kaynak ve hedefi seçin. Bu ekran salt okunur klon planı oluşturur.</p>
- <label>Kaynak disk<select v-model="selected"><option :value="null">Disk seçin</option><option v-for="d in disks" :key="d.number" :value="d.number">{{d.number}} · {{d.model}} · {{d.serial}} · {{fmt(d.bytes)}}</option></select></label>
- <label>Hedef disk<select v-model="target"><option :value="null">Disk seçin</option><option v-for="d in disks" :key="d.number" :value="d.number">{{d.number}} · {{d.model}} · {{d.serial}} · {{fmt(d.bytes)}}</option></select></label>
- <div class="actions">
- <button class="primary" :disabled="busy||selected===null||target===null" @click="plan">Planı denetle</button>
- <button :disabled="busy||selected===null||target===null||selected===target" @click="reverseDirection">Kaynak ve hedefi değiştir</button>
- </div>
- <p v-if="layoutMode==='gpt'">Daha büyük hedefte sağlam bir GPT ve açık GPT taşıma onayı gerekir. Bölüm sınırları korunur.</p>
- <p v-else-if="layoutMode==='exact'">Kapasiteler eşit. Plan tam disk kopyasını denetler.</p>
- <p v-else-if="layoutMode==='smaller'" class="notice">Hedef, kaynak diskin tüm sektörlerini alamayacak kadar küçük.</p>
- <p v-else-if="layoutMode==='sector'" class="notice">Mantıksal sektör boyları farklı.</p><p v-if="planChecked&&!reasons.length">Uyumluluk denetimi engel bulmadı.</p><ul v-if="reasons.length" aria-live="polite"><li v-for="reason in reasons" :key="reason">{{reason}}</li></ul></section>
- <template v-if="sourcePages.includes(page)"><section>
- <h2>Kaynak</h2><div class="seg"><button :class="{chosen:mode==='image'}" @click="mode='image'">İmaj dosyası</button><button :class="{chosen:mode==='disk'}" @click="mode='disk'">Fiziksel disk</button></div>
- <label v-if="mode==='image'">RAW dosyasının tam yolu<input v-model="path" placeholder="D:\Arşiv\Mac.raw" spellcheck="false"></label>
- <label v-else>Fiziksel disk<select v-model="selected"><option :value="null">Disk seçin</option><option v-for="d in disks" :key="d.number" :value="d.number">{{d.number}} · {{d.model}} · {{d.serial}} · {{fmt(d.bytes)}}</option></select></label>
- <p v-if="mode==='disk'">İmaj alma ve doğrulama için kaynak önceden çevrimdışı olmalıdır. Uygulama disk durumunu değiştirmez.</p>
- <template v-if="page==='Disk imajı'||page==='Kurtarma'"><label>İş klasörünün tam yolu<input v-model="directory" placeholder="E:\Kurtarma\Mac-001" spellcheck="false"></label>
- <label class="check"><input v-model="resume" type="checkbox"> Mevcut iş kaydından devam et</label>
- <p>{{page==='Kurtarma'?'Okunamayan sektörler yeniden denenir. Eksik kalan sektörlerin konumu kaydedilir ve imajda sıfırla doldurulur.':'Yeni iş için henüz var olmayan bir klasör seçin. İmaj ve doğrulama raporu burada oluşturulur.'}}</p></template>
- <label v-if="page==='Doğrulama'">Beklenen SHA-256<input v-model="expected" placeholder="64 onaltılık karakter" spellcheck="false"></label>
- <button class="primary" :disabled="busy||!subject||((page==='Kurtarma'||page==='Disk imajı')&&!directory.trim())||(page==='Doğrulama'&&!/^[a-f0-9]{64}$/i.test(expected.trim()))" @click="start">{{page==='Dosya sistemi'?'Bölüm tablosunu incele':page==='Doğrulama'?'İçeriği doğrula':resume?'İşe devam et':'İmaj al'}}</button>
- </section><section v-if="layout"><h2>{{layout.table}}</h2><p v-if="!layout.partitions.length">{{layout.filesystem}}</p><p v-for="w in layout.warnings" :key="w" class="notice">{{w}}</p><table v-if="layout.partitions.length"><thead><tr><th>Bölüm</th><th>Başlangıç – son LBA</th><th>İmza</th></tr></thead><tbody><tr v-for="p in layout.partitions" :key="p.start_lba"><td>{{p.label||p.kind}}</td><td>{{p.start_lba}} – {{p.end_lba}}</td><td>{{p.filesystem}}</td></tr></tbody></table></section></template>
- <section v-if="page==='Ayarlar'"><h2>Okuma ayarları</h2><label>RAW dosyasının mantıksal sektör boyu<select v-model="sector"><option :value="512">512 B</option><option :value="4096">4096 B</option></select></label><label>Transfer blok boyu<select v-model="block"><option v-for="n in [65536,1048576,4194304,8388608]" :key="n" :value="n">{{n/1024}} KiB</option></select></label><p>Devam ederken ilk işteki sektör ve blok boyunu seçin.</p></section>
- <section v-if="page==='Günlük'"><h2>Bu oturum</h2><p v-if="!activity.length">Henüz olay kaydedilmedi.</p><p v-for="(a,i) in activity" :key="i" class="mono">{{a}}</p><p>Kalıcı kayıtlar her iş klasöründe job.json, map.jsonl ve report.json dosyalarındadır.</p></section>
- <section v-if="status?.id" aria-live="polite"><h2>İşlem {{status.id}}</h2><p>{{({verify:'Hedefi yeniden okuma',copy:'Kopyalama',resume_check:'Önceki parçaları denetleme'} as Record<string,string>)[status.progress.phase]||'Hazırlık'}}</p><progress :value="pct" max="100"></progress><p>{{pct}}% · {{fmt(status.progress.bytes)}} / {{fmt(status.progress.total)}} · Eksik sektör {{status.progress.missing_sectors}}</p>
- <p v-if="status.running&&speed>0">{{(speed/1048576).toFixed(1)}} MiB/sn · Kalan yaklaşık {{Math.ceil((status.progress.total-status.progress.bytes)/speed)}} sn</p><button v-if="status.running" @click="act(()=>api.cancel(status!.id))">Güvenli noktada durdur</button><p>{{status.message}}</p>
- <template v-if="status.report"><h3>{{status.report.outcome==='partial'?'Eksik sektörlerle tamamlandı':'İmaj doğrulandı'}}</h3><p>Doğrulanan kaynak kapsamı {{fmt(status.report.verified_bytes)}}</p><code>{{status.report.sha256}}</code></template></section>
- </main></div>
+  <div class="shell">
+    <a href="#main-content" class="skip-link">İçeriğe geç</a>
+    <aside class="sidebar">
+      <div class="brand">
+        <img :src="logo" width="44" height="44" alt="">
+        <div><strong>MacClone</strong><span>Starlit Studios</span></div>
+      </div>
+      <nav class="navigation" aria-label="Ana menü">
+        <div v-for="group in navigation" :key="group.label" class="nav-group">
+          <p class="nav-label">{{ group.label }}</p>
+          <button
+            v-for="item in group.items" :key="item.id" type="button"
+            class="nav-item" :aria-current="page === item.id ? 'page' : undefined"
+            @click="navigate(item.id)"
+          >
+            <component :is="item.icon" :size="17" :stroke-width="1.8" aria-hidden="true" />
+            <span>{{ item.title }}</span>
+          </button>
+        </div>
+      </nav>
+    </aside>
+
+    <main id="main-content" class="workspace">
+      <header class="page-header">
+        <div>
+          <h1 ref="heading" tabindex="-1">{{ title }}</h1>
+          <p>{{ descriptions[page] }}</p>
+        </div>
+        <button v-if="canRefresh" type="button" class="button button-quiet" :disabled="inventoryLoading" @click="refresh">
+          <RefreshCw :size="16" :class="{ spinning: inventoryLoading }" aria-hidden="true" />
+          {{ inventoryLoading ? 'Diskler okunuyor…' : 'Diskleri yenile' }}
+        </button>
+      </header>
+
+      <div v-if="actionError" class="notice notice-danger" role="alert">
+        <CircleAlert :size="17" aria-hidden="true" /><span>{{ actionError }}</span>
+      </div>
+
+      <template v-if="overview">
+        <div v-if="page === 'overview'" class="summary">
+          <div class="panel stat">
+            <span class="stat-icon"><HardDrive :size="19" aria-hidden="true" /></span>
+            <dl><dt>Fiziksel diskler</dt><dd>{{ inventoryLoading || inventoryError ? '—' : disks.length }}</dd></dl>
+          </div>
+          <div class="panel stat">
+            <span class="stat-icon"><Database :size="19" aria-hidden="true" /></span>
+            <dl><dt>Toplam kapasite</dt><dd>{{ inventoryLoading || inventoryError ? '—' : formatBytes(totalCapacity) }}</dd></dl>
+          </div>
+          <div class="panel stat">
+            <span class="stat-icon"><Activity :size="19" aria-hidden="true" /></span>
+            <dl><dt>İşlem durumu</dt><dd>{{ startingId !== null ? 'Hazırlanıyor' : status ? outcomeLabel[status.outcome] : '—' }}</dd></dl>
+          </div>
+        </div>
+
+        <section class="panel" aria-labelledby="disks-title" :aria-busy="inventoryLoading">
+          <div class="panel-heading">
+            <div class="panel-title"><HardDrive :size="19" aria-hidden="true" /><h2 id="disks-title">Disk envanteri</h2></div>
+            <span v-if="!inventoryLoading && !inventoryError" class="quiet">{{ disks.length }} aygıt</span>
+          </div>
+          <div v-if="inventoryError" class="panel-body">
+            <div class="notice notice-danger" role="alert">
+              <CircleAlert :size="18" aria-hidden="true" />
+              <div><strong>Disk listesi alınamadı.</strong><p>{{ inventoryError }}</p></div>
+            </div>
+          </div>
+          <p v-else-if="inventoryLoading" class="empty-state" role="status">Disk envanteri okunuyor…</p>
+          <DeviceTable v-else-if="disks.length" :disks="disks" :busy="busy" @inspect="inspectDisk" />
+          <div v-else class="empty-state">
+            <HardDrive :size="24" aria-hidden="true" />
+            <strong>Bağlı disk bulunamadı</strong>
+            <p>Bir disk bağladıktan sonra envanteri yenileyin.</p>
+          </div>
+        </section>
+
+        <section v-if="page === 'overview'" aria-labelledby="actions-title">
+          <h2 id="actions-title" class="section-title">Hızlı işlemler</h2>
+          <div class="quick-actions">
+            <button class="panel quick-action" type="button" @click="navigate('plan')">
+              <span class="stat-icon"><ArrowLeftRight :size="20" aria-hidden="true" /></span>
+              <span><strong>Klon planı oluştur</strong><small>Kaynak ve hedef diskleri karşılaştır.</small></span>
+              <ArrowUpRight :size="17" aria-hidden="true" />
+            </button>
+            <button class="panel quick-action" type="button" @click="navigate('image')">
+              <span class="stat-icon"><FileArchive :size="20" aria-hidden="true" /></span>
+              <span><strong>RAW imaj al</strong><small>Yeni bir dosya tabanlı kopya oluştur.</small></span>
+              <ArrowUpRight :size="17" aria-hidden="true" />
+            </button>
+          </div>
+        </section>
+      </template>
+
+      <section v-if="page === 'plan'" class="panel" aria-labelledby="plan-title">
+        <div class="panel-heading">
+          <div class="panel-title"><ArrowLeftRight :size="19" aria-hidden="true" /><h2 id="plan-title">Kaynak ve hedef</h2></div>
+          <span class="pill pill-neutral">Salt okunur plan</span>
+        </div>
+        <form class="panel-body form" @submit.prevent="checkPlan">
+          <div v-if="inventoryError" class="notice notice-danger"><CircleAlert :size="17" aria-hidden="true" /><span>{{ inventoryError }}</span></div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="plan-source">Kaynak disk</label>
+              <select id="plan-source" v-model="selected" :disabled="inventoryLoading" :aria-describedby="sourceDisk ? 'plan-source-details' : undefined">
+                <option :value="null">{{ inventoryLoading ? 'Diskler okunuyor…' : 'Kaynak seçin' }}</option>
+                <option v-for="disk in disks" :key="disk.number" :value="disk.number" :disabled="!disk.id">
+                  {{ diskLabel(disk) }}
+                </option>
+              </select>
+              <span v-if="sourceDisk" id="plan-source-details" class="field-meta">Seri {{ sourceDisk.serial || 'bilinmiyor' }} · {{ sourceDisk.logical }} B sektör</span>
+            </div>
+            <div class="field">
+              <label for="plan-target">Hedef disk</label>
+              <select id="plan-target" v-model="target" :disabled="inventoryLoading" :aria-describedby="targetDisk ? 'plan-target-details' : undefined">
+                <option :value="null">{{ inventoryLoading ? 'Diskler okunuyor…' : 'Hedef seçin' }}</option>
+                <option v-for="disk in disks" :key="disk.number" :value="disk.number" :disabled="!disk.id">
+                  {{ diskLabel(disk) }}
+                </option>
+              </select>
+              <span v-if="targetDisk" id="plan-target-details" class="field-meta">Seri {{ targetDisk.serial || 'bilinmiyor' }} · {{ targetDisk.logical }} B sektör</span>
+            </div>
+          </div>
+          <div v-if="planHint" class="notice" :class="`notice-${planHint.tone}`">
+            <CircleAlert :size="17" aria-hidden="true" /><span>{{ planHint.message }}</span>
+          </div>
+          <div class="actions">
+            <button class="button button-primary" type="submit" :disabled="!canPlan">
+              <ShieldCheck :size="17" aria-hidden="true" /> {{ action === 'plan' ? 'Denetleniyor…' : 'Planı denetle' }}
+            </button>
+            <button class="button button-quiet" type="button" :disabled="busy || !sourceDisk || !targetDisk || selected === target" @click="reverseDirection">
+              <ArrowLeftRight :size="17" aria-hidden="true" /> Kaynak ve hedefi değiştir
+            </button>
+          </div>
+          <div v-if="planErrors !== null" class="notice" :class="planErrors.length ? 'notice-danger' : 'notice-success'" role="status">
+            <CircleAlert v-if="planErrors.length" :size="18" aria-hidden="true" /><CircleCheck v-else :size="18" aria-hidden="true" />
+            <div>
+              <strong>{{ planErrors.length ? 'Klon planı engellendi' : 'Aygıt uyumluluğu denetimi geçti' }}</strong>
+              <ul v-if="planErrors.length"><li v-for="reason in planErrors" :key="reason">{{ reason }}</li></ul>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <template v-if="sourcePage">
+        <section class="panel" aria-labelledby="source-title">
+          <div class="panel-heading"><div class="panel-title"><HardDrive :size="19" aria-hidden="true" /><h2 id="source-title">Kaynak ayarları</h2></div></div>
+          <form class="panel-body form" @submit.prevent="start">
+            <fieldset class="source-choices">
+              <legend>Kaynak türü</legend>
+              <label>
+                <input v-model="mode" type="radio" value="image">
+                <FileArchive :size="18" aria-hidden="true" /> İmaj dosyası
+              </label>
+              <label>
+                <input v-model="mode" type="radio" value="disk">
+                <HardDrive :size="18" aria-hidden="true" /> Fiziksel disk
+              </label>
+            </fieldset>
+            <template v-if="mode === 'image'">
+              <label class="field">RAW dosyasının tam yolu
+                <input v-model="path" type="text" placeholder="D:\Arşiv\Mac.raw" autocomplete="off" spellcheck="false">
+              </label>
+              <span class="quiet">Mantıksal sektör {{ sector }} B · <button class="text-button" type="button" @click="navigate('settings')">Ayarlar</button></span>
+            </template>
+            <template v-else>
+              <label class="field">Fiziksel disk
+                <select v-model="selected" :disabled="inventoryLoading">
+                  <option :value="null">{{ inventoryLoading ? 'Diskler okunuyor…' : 'Disk seçin' }}</option>
+                  <option v-for="disk in disks" :key="disk.number" :value="disk.number" :disabled="!disk.id">{{ diskLabel(disk) }}</option>
+                </select>
+              </label>
+              <div v-if="sourceDisk && sourceDisk.offline !== true && page !== 'inspect'" class="notice notice-warning" role="status">
+                <CircleAlert :size="17" aria-hidden="true" /><span>İmaj alma ve doğrulama için disk çevrimdışı olmalıdır.</span>
+              </div>
+              <span v-if="inventoryError" class="text-danger">{{ inventoryError }}</span>
+            </template>
+            <template v-if="imagePage">
+              <label class="field">İş klasörünün tam yolu
+                <input v-model="directory" type="text" placeholder="E:\Kurtarma\Mac-001" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="check"><input v-model="resume" type="checkbox"> Mevcut iş kaydından devam et</label>
+              <p class="quiet">{{ resume ? 'Önceki işlemin klasörünü kullanın.' : 'Henüz var olmayan bir klasör adı girin.' }}</p>
+              <p v-if="page === 'recovery'" class="quiet">Kurtarılamayan sektörler sıfırla doldurulur ve rapora işlenir.</p>
+            </template>
+            <div v-if="page === 'verify'" class="field">
+              <label for="expected-digest">Beklenen SHA-256</label>
+              <input id="expected-digest" v-model="expected" class="mono" type="text" placeholder="64 onaltılık karakter"
+                autocomplete="off" spellcheck="false" :aria-invalid="invalidDigest" :aria-describedby="invalidDigest ? 'digest-error' : undefined">
+              <span v-if="invalidDigest" id="digest-error" class="text-danger">64 karakter girin. Yalnızca 0–9 ve A–F kullanılabilir.</span>
+            </div>
+            <div class="actions">
+              <button class="button button-primary" type="submit" :disabled="!canStart">
+                {{ startLabel }} <ArrowRight :size="17" aria-hidden="true" />
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section v-if="layout" class="panel" aria-labelledby="layout-title">
+          <div class="panel-heading">
+            <div class="panel-title"><ScanSearch :size="19" aria-hidden="true" /><h2 id="layout-title">{{ layout.table }}</h2></div>
+            <span class="quiet">{{ layout.partitions.length }} bölüm</span>
+          </div>
+          <div v-if="layout.warnings.length || !layout.partitions.length" class="panel-body">
+            <p v-if="!layout.partitions.length" class="quiet">{{ layout.filesystem }}</p>
+            <div v-for="warning in layout.warnings" :key="warning" class="notice notice-warning">
+              <CircleAlert :size="17" aria-hidden="true" /><span>{{ warning }}</span>
+            </div>
+          </div>
+          <div v-if="layout.partitions.length" class="table-wrap" tabindex="0" role="region" aria-label="Bölüm tablosu">
+            <table>
+              <thead><tr><th scope="col">Bölüm</th><th scope="col">Başlangıç – son LBA</th><th scope="col">İmza</th></tr></thead>
+              <tbody>
+                <tr v-for="partition in layout.partitions" :key="partition.start_lba">
+                  <th scope="row">{{ partition.label || partition.kind }}</th>
+                  <td class="tabular">{{ partition.start_lba }} – {{ partition.end_lba }}</td>
+                  <td>{{ partition.filesystem }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </template>
+
+      <section v-if="page === 'settings'" class="panel" aria-labelledby="settings-title">
+        <div class="panel-heading"><div class="panel-title"><Settings2 :size="19" aria-hidden="true" /><h2 id="settings-title">Okuma ayarları</h2></div></div>
+        <div class="panel-body form">
+          <div class="field-grid">
+            <label class="field">RAW dosyasının mantıksal sektör boyu
+              <select v-model="sector"><option :value="512">512 B</option><option :value="4096">4096 B</option></select>
+            </label>
+            <label class="field">Transfer blok boyu
+              <select v-model="block">
+                <option v-for="n in [65536, 1048576, 4194304, 8388608]" :key="n" :value="n">{{ formatBytes(n) }}</option>
+              </select>
+            </label>
+          </div>
+          <p class="quiet">Bir işe devam ederken ilk işlemdeki sektör ve blok boyutlarını kullanın.</p>
+        </div>
+      </section>
+
+      <section v-if="page === 'logs'" class="panel" aria-labelledby="logs-title">
+        <div class="panel-heading"><div class="panel-title"><ClipboardList :size="19" aria-hidden="true" /><h2 id="logs-title">Oturum günlüğü</h2></div></div>
+        <div class="panel-body">
+          <p v-if="!activity.length" class="quiet">Bu oturumda henüz olay kaydedilmedi.</p>
+          <ul v-else class="logs">
+            <li v-for="(entry, index) in activity" :key="index">
+              <span class="mono">{{ entry.timestamp }}</span><span>{{ entry.message }}</span>
+            </li>
+          </ul>
+          <p class="quiet">Kalıcı iş kayıtları, imajın iş klasöründe saklanır.</p>
+        </div>
+      </section>
+
+      <div v-if="statusError" class="notice notice-danger" role="alert">
+        <CircleAlert :size="17" aria-hidden="true" /><span>İşlem durumu alınamadı. {{ statusError }}</span>
+      </div>
+      <div v-if="cancelError" class="notice notice-danger" role="alert">
+        <CircleAlert :size="17" aria-hidden="true" /><span>Durdurma isteği gönderilemedi. {{ cancelError }}</span>
+      </div>
+      <OperationPanel v-if="status?.id" :status="status" :speed="speed" :stopping="stopping" @cancel="cancelOperation" />
+    </main>
+  </div>
 </template>

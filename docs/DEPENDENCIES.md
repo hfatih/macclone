@@ -12,6 +12,7 @@
 | tracing / tracing-subscriber | CLI tanılama kaydı, veri içeriğini kaydetmeden | MIT |
 | Tauri 2, tauri-build, JS API/CLI | Yerel masaüstü penceresi, dar IPC ve Windows paketleme | MIT OR Apache-2.0 |
 | Vue 3 | Reaktif disk görünümü ve işlem durumu | MIT |
+| Lucide Vue | Masaüstü gezinme ve işlem simgeleri | ISC, Feather kökenli simgeler MIT |
 | TypeScript, vue-tsc | İstemci veri türleri ve şablon denetimi | Apache-2.0 / MIT |
 | Vite, Vue Vite eklentisi, Tailwind CSS, PostCSS, Autoprefixer | Üretim varlıkları, stiller, çevrimdışı çalışan arayüz | MIT |
 | ESLint, typescript-eslint, eslint-plugin-vue | Derlemeden bağımsız statik frontend denetimi | MIT |
