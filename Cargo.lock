@@ -1928,6 +1928,7 @@ name = "mc-device"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
@@ -1938,6 +1939,7 @@ dependencies = [
 name = "mc-engine"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mc-device",
  "mc-inspect",
  "same-file",
@@ -1945,6 +1947,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

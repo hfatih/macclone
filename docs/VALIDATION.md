@@ -59,3 +59,11 @@ Windows x64 çapraz derleme ve Clippy geçti. Masaüstü için `npm run lint` ve
 - Aynı hedef boyutuyla devam ve farklı boyutla devamın reddi test edildi. Küçük hedef, hibrit MBR ve tek kopyası bozuk GPT daha büyük imaj oluşturamadı. Kaynak baytları değişmedi.
 - Vue lint ve üretim derlemesi geçti. Chromium'da sentetik Tauri çağrılarıyla logo yükleme, Starlit Studios ibaresi, modellerin iki yönlü seçimi, kapasite uyarısı ve seçim değişince eski planın temizlenmesi doğrulandı.
 - Windows x64 aday CLI ve MacClone masaüstü çapraz derlemeleri geçti. Fiziksel 512/4096 bayt sektörlü disk yazımı, yerel Windows VHDX kabulü ve macOS açılışı bu ortamda çalıştırılmadı.
+
+## Doğrulama ve devam hataları
+
+- 51 Rust testi geçti. Yeni regresyonlar, doğrulama sırasında aynı adla oluşan raporun korunmasını, eksik günlüğe sahip tamamlanmış işin yeniden yazmaya başlamamasını, bağlantı üzerinden rapor okunmasının engellenmesini, RAW kaynağın FIFO ile değiştirilmesini ve GPT ön sektörleri okunamadığında yedek tablodan incelemeyi kapsıyor.
+- Gerçek CLI ile 512 ve 4096 bayt sektörlü GPT vakaları geçti. Eşit boyutta ham kopya `partition-manager` çıktısıyla bayt bayt eşleşti. Ek denetimler, MBR ve birincil GPT kaybından sonra incelemeyi ve ortak tablo dizisi kullanan geçersiz GPT yedeğinin bildirilmesini kapsıyor.
+- Linux'ta 96 deterministik GPT/MBR mutasyonu ile CLI incelemesi kilitlenme veya Rust paniği üretmedi.
+- Chromium'da sentetik Tauri çağrılarıyla aynı numaraya takılan yeni disk, geç gelen bölüm sonucu ve tamamlanmış işi eski bir ilerleme yanıtıyla geri alma senaryoları sınandı.
+- Windows fiziksel klon adayı, işletim sistemi dosya önbelleğini atlayan sektör hizalı G/Ç kullanır. Aday CLI ve masaüstü Windows x64 için çapraz derlendi. Ham cihazlarda erişim modunun ve sürücü davranışının Windows çalışma zamanı doğrulaması bekliyor.

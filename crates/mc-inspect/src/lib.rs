@@ -83,7 +83,7 @@ fn gpt<R: Read + Seek>(r: &mut R, at_lba: u64, total: u64, s: u64) -> io::Result
     }
     let crc = u32le(&h, 16);
     h[16..20].fill(0);
-    if crc32fast::hash(&h[..len]) != crc || u64le(&h, 24) != at_lba {
+    if crc32fast::hash(&h[..len]) != crc || u64le(&h, 24) != at_lba || u32le(&h, 20) != 0 {
         return Err(bad("GPT header CRC/location"));
     }
     let first = u64le(&h, 40);
@@ -110,7 +110,8 @@ fn gpt<R: Read + Seek>(r: &mut R, at_lba: u64, total: u64, s: u64) -> io::Result
         || count > 16384
         || entries_at < 2
         || end > total
-        || !(end <= first || entries_at > last)
+        || (at_lba == 1 && (end > first || other != total - 1))
+        || (at_lba == total - 1 && (entries_at <= last || end > at_lba || other != 1))
         || (entries_at..end).contains(&at_lba)
         || (entries_at..end).contains(&other)
     {
@@ -143,7 +144,7 @@ pub fn inspect<R: Read + Seek>(r: &mut R, bytes: u64, sector: u32) -> io::Result
     let s = u64::from(sector);
     let total = bytes / s;
     let mut m = [0; 512];
-    at(r, 0, &mut m)?;
+    let mbr_read = at(r, 0, &mut m);
     let mut o = Layout {
         table: "Unknown".into(),
         partitions: vec![],
@@ -151,17 +152,37 @@ pub fn inspect<R: Read + Seek>(r: &mut R, bytes: u64, sector: u32) -> io::Result
         warnings: vec![],
     };
     let mut tag = [0; 8];
-    if total > 1 {
-        at(r, s, &mut tag)?
-    }
-    let protective = m[510..] == [0x55, 0xaa] && m[446..510].chunks_exact(16).any(|e| e[4] == 0xee);
+    let tag_read = if total > 1 {
+        at(r, s, &mut tag)
+    } else {
+        Ok(())
+    };
+    let primary_signature = tag_read.is_ok() && &tag == b"EFI PART";
+    let protective = mbr_read.is_ok()
+        && m[510..] == [0x55, 0xaa]
+        && m[446..510].chunks_exact(16).any(|e| e[4] == 0xee);
+    let backup_hint = if total > 1 && !primary_signature && !protective {
+        // A valid backup can identify GPT even after losing both records at the front.
+        gpt(r, total - 1, total, s).ok()
+    } else {
+        None
+    };
+    let is_gpt = primary_signature || protective || backup_hint.is_some();
+    let mbr_unreadable = match mbr_read {
+        Err(error) if !is_gpt => return Err(error),
+        Err(error) => Some(error),
+        Ok(()) => None,
+    };
     let mut apm_entry = [0u8; 2];
-    if &m[..2] == b"ER" && bytes >= 514 {
-        at(r, 512, &mut apm_entry)?
+    if !is_gpt {
+        tag_read?;
+        if &m[..2] == b"ER" && bytes >= 514 {
+            at(r, 512, &mut apm_entry)?;
+        }
     }
-    if &tag == b"EFI PART" || protective {
+    if is_gpt {
         let primary = gpt(r, 1, total, s);
-        let backup = gpt(r, total - 1, total, s);
+        let backup = backup_hint.map_or_else(|| gpt(r, total - 1, total, s), Ok);
         let chosen = match (primary, backup) {
             (Ok(a), Ok(b)) => {
                 if a.other != total - 1
@@ -187,8 +208,11 @@ pub fn inspect<R: Read + Seek>(r: &mut R, bytes: u64, sector: u32) -> io::Result
             (Err(a), Err(b)) => return Err(bad(&format!("Both GPT copies invalid: {a}, {b}"))),
         };
         o.table = "GPT".into();
-        if !protective {
-            o.warnings.push("Protective MBR missing".into())
+        if let Some(error) = mbr_unreadable {
+            o.warnings
+                .push(format!("Protective MBR unreadable: {error}"));
+        } else if !protective {
+            o.warnings.push("Protective MBR missing".into());
         }
         for e in chosen
             .entries
@@ -281,6 +305,57 @@ mod tests {
     fn unknown() {
         assert_eq!(probe(vec![0; 4096]).unwrap().filesystem, "Unknown")
     }
+    #[test]
+    fn gpt_backup_provides_layout_when_front_sectors_are_unreadable() {
+        struct UnreadableFront(Cursor<Vec<u8>>);
+        impl Read for UnreadableFront {
+            fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+                if self.0.position() < 1024 {
+                    return Err(io::Error::other("simulated unreadable sector"));
+                }
+                self.0.read(b)
+            }
+        }
+        impl Seek for UnreadableFront {
+            fn seek(&mut self, seek: SeekFrom) -> io::Result<u64> {
+                self.0.seek(seek)
+            }
+        }
+        let mut data = vec![0_u8; 8 * 512];
+        let table = [0_u8; 128];
+        let header = &mut data[7 * 512..8 * 512];
+        header[..8].copy_from_slice(b"EFI PART");
+        for (offset, value) in [
+            (8, 0x10000_u32),
+            (12, 92),
+            (80, 1),
+            (84, 128),
+            (88, crc32fast::hash(&table)),
+        ] {
+            header[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for (offset, value) in [(24, 7_u64), (32, 1), (40, 3), (48, 5), (72, 6)] {
+            header[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        let crc = crc32fast::hash(&header[..92]);
+        header[16..20].copy_from_slice(&crc.to_le_bytes());
+        let len = data.len() as u64;
+        let result = inspect(&mut UnreadableFront(Cursor::new(data)), len, 512).unwrap();
+        assert_eq!(result.table, "GPT");
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warn| warn.contains("Using backup GPT"))
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warn| warn.contains("Protective MBR unreadable"))
+        );
+    }
+
     #[test]
     fn mbr_efi() {
         let p = probe(mbr()).unwrap();

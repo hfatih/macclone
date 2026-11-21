@@ -43,6 +43,9 @@ with tempfile.TemporaryDirectory() as root:
         assert (job/'image.raw').read_bytes() == raw == src.read_bytes()
         assert report['sha256'] == hashlib.sha256(raw).hexdigest()
         assert cli('verify', job/'image.raw', report['sha256'], *settings)['outcome'] == 'verified'
+        cli('verify', job/'image.raw', report['sha256'], *settings, '--resume', success=False)
+        cli('inspect', src, *settings, '--block', 512, success=False)
+        cli('image', src, folder/'duplicate-flags', *settings, '--sector', sector, success=False)
         if args.partition_manager:
             reference = folder/'pm-clone.raw'
             reference.write_bytes(b'\xa5' * len(raw))
@@ -87,6 +90,25 @@ with tempfile.TemporaryDirectory() as root:
         cli('image', hybrid, folder/'hybrid-job', *settings, '--target-bytes', len(raw)+sector, success=False)
         assert not (folder/'hybrid-job').exists()
         assert src.read_bytes() == raw
+        backup_only = folder/'backup-only.raw'
+        missing_front = raw[:]
+        missing_front[:2*sector] = bytes(2*sector)
+        backup_only.write_bytes(missing_front)
+        recovered = cli('inspect', backup_only, *settings)
+        assert recovered['table'] == 'GPT'
+        assert recovered['partitions'] == layout['partitions']
+        assert any('Using backup GPT' in warning for warning in recovered['warnings'])
+        assert 'Protective MBR missing' in recovered['warnings']
+
+        shared = folder/'shared-array.raw'
+        shared_data = raw[:]
+        header_offset = len(shared_data)-sector
+        struct.pack_into('<Q', shared_data, header_offset+72, 2)
+        struct.pack_into('<I', shared_data, header_offset+16, 0)
+        struct.pack_into('<I', shared_data, header_offset+16, zlib.crc32(shared_data[header_offset:header_offset+92]))
+        shared.write_bytes(shared_data)
+        shared_layout = cli('inspect', shared, *settings)
+        assert any('Backup GPT at final LBA' in warning for warning in shared_layout['warnings'])
         # Damage the primary table, then the secondary table. Inspection never repairs either.
         raw[2*sector + 7] ^= 1
         src.write_bytes(raw)

@@ -10,6 +10,8 @@ fn result() -> io::Result<serde_json::Value> {
     let mut args: Vec<_> = env::args().skip(1).collect();
     let mut sector = 512;
     let mut options = Options::default();
+    let mut sector_explicit = false;
+    let mut block_explicit = false;
     let mut resume = false;
     let mut target_bytes = None;
     let mut i = 0;
@@ -21,10 +23,14 @@ fn result() -> io::Result<serde_json::Value> {
                     return Err(invalid(USAGE));
                 }
                 let value = args.remove(i).parse::<u32>().map_err(invalid_number)?;
-                if flag == "--sector" {
-                    sector = value
+                if flag == "--sector" && !sector_explicit {
+                    sector = value;
+                    sector_explicit = true;
+                } else if flag == "--block" && !block_explicit {
+                    options.block = value;
+                    block_explicit = true;
                 } else {
-                    options.block = value
+                    return Err(invalid(format!("Duplicate {flag}")));
                 }
             }
             "--target-bytes" if target_bytes.is_none() => {
@@ -35,19 +41,33 @@ fn result() -> io::Result<serde_json::Value> {
                 target_bytes = Some(args.remove(i).parse::<u64>().map_err(invalid_number)?);
             }
             "--target-bytes" => return Err(invalid("Duplicate --target-bytes")),
-            "--recover" => {
+            "--recover" if !options.recovery => {
                 options.recovery = true;
                 args.remove(i);
             }
-            "--resume" => {
+            "--resume" if !resume => {
                 resume = true;
                 args.remove(i);
             }
+            "--recover" | "--resume" => return Err(invalid(format!("Duplicate {}", args[i]))),
             _ => i += 1,
         }
     }
-    if target_bytes.is_some() && args.first().map(String::as_str) != Some("image") {
-        return Err(invalid("--target-bytes is only supported by image"));
+    let command = args.first().map(String::as_str).unwrap_or_default();
+    if (target_bytes.is_some() || resume) && command != "image" {
+        return Err(invalid(
+            "--target-bytes and --resume are only supported by image",
+        ));
+    }
+    if (options.recovery || block_explicit) && !matches!(command, "image" | "dry-run") {
+        return Err(invalid(
+            "--recover and --block are only supported by image and dry-run",
+        ));
+    }
+    if sector_explicit && !matches!(command, "image" | "dry-run" | "inspect" | "verify") {
+        return Err(invalid(
+            "--sector is only supported for image file operations",
+        ));
     }
     let src = |s: &str| -> io::Result<Input> {
         if let Some(d) = s.strip_prefix("disk:") {

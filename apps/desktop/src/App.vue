@@ -14,26 +14,68 @@ const busy=computed(()=>loading.value||status.value?.running)
 const sourcePages:readonly Tab[]=['Disk imajı','Kurtarma','Dosya sistemi','Doğrulama']
 const pct=computed(()=>{const p=status.value?.progress;return p?.total?Math.floor(100*p.bytes/p.total):0})
 const speed=ref(0)
+let selectionRevision=0
+let inventoryRevision=0
+let pendingStatus=false
 let unlisten:(()=>void)|undefined, timer:ReturnType<typeof setInterval>|undefined, previous:{id:number;phase:string;bytes:number;time:number}|undefined
 const fmt=(n:number)=>new Intl.NumberFormat('tr-TR',{maximumFractionDigits:1}).format(n/2**30)+' GiB'
 const seen=(v:boolean|null)=>v==null?'Bilinmiyor':v?'Evet':'Hayır'
 function log(text:string){activity.value=[new Date().toLocaleTimeString('tr-TR')+'  '+text,...activity.value].slice(0,80)}
 function apply(s:Status){
+ const current=status.value
+ if(current&&(s.id<current.id||(s.id===current.id&&s.revision<=current.revision)))return
  const time=performance.now(),p=s.progress
- if(previous?.id===s.id && previous.phase===p.phase && p.bytes>previous.bytes){speed.value=(p.bytes-previous.bytes)*1000/(time-previous.time)}
+ if(previous?.id===s.id && previous.phase===p.phase && p.bytes>previous.bytes && time>previous.time){speed.value=(p.bytes-previous.bytes)*1000/(time-previous.time)}
  else if(previous?.phase!==p.phase || previous.id!==s.id){speed.value=0}
  if(previous?.bytes!==p.bytes||previous?.phase!==p.phase||previous?.id!==s.id)previous={id:s.id,phase:p.phase,bytes:p.bytes,time}
  if(s.message && (status.value?.message!==s.message || status.value.id!==s.id))log(s.message)
  status.value=s
 }
-async function refresh(){inventoryError.value='';try{disks.value=await api.disks()}catch(e){inventoryError.value=String(e);disks.value=[]}}
-async function act(f:()=>Promise<void>){error.value='';loading.value=true;try{await f()}catch(e){error.value=String(e);log(String(e))}finally{loading.value=false}}
-async function start(){if(!subject.value)return;const input=subject.value;await act(async()=>{
- if(page.value==='Dosya sistemi'){layout.value=await api.inspect(input);return}
- if(page.value==='Doğrulama')await api.verify(input,expected.value.trim())
- else await api.image(input,directory.value,block.value,page.value==='Kurtarma',resume.value)
- apply(await api.status())
-})}
+function isSameDisk(previous:Disk|undefined, next:Disk|undefined){
+ return !!previous?.id&&!!next&&previous.id===next.id&&previous.serial===next.serial
+}
+async function refresh(){
+ const run=++inventoryRevision
+ inventoryError.value=''
+ try{
+   const found=await api.disks()
+   if(run!==inventoryRevision)return
+   if(selected.value!==null&&!isSameDisk(disk.value,found.find(d=>d.number===selected.value)))selected.value=null
+   if(target.value!==null&&!isSameDisk(selectedTarget.value,found.find(d=>d.number===target.value)))target.value=null
+   disks.value=found
+ }catch(e){
+   if(run!==inventoryRevision)return
+   inventoryError.value=String(e)
+   selected.value=null
+   target.value=null
+   disks.value=[]
+ }
+}
+async function act(f:()=>Promise<void>){
+ if(loading.value)return
+ const version=selectionRevision
+ error.value=''
+ loading.value=true
+ try{await f()}catch(e){
+   if(version===selectionRevision)error.value=String(e)
+   log(String(e))
+ }finally{loading.value=false}
+}
+async function start(){
+ const input=subject.value
+ if(!input)return
+ const version=selectionRevision
+ await act(async()=>{
+   if(page.value==='Dosya sistemi'){
+     const result=await api.inspect(input)
+     if(version===selectionRevision)layout.value=result
+     return
+   }
+   if(page.value==='Doğrulama')await api.verify(input,expected.value.trim())
+   else await api.image(input,directory.value,block.value,page.value==='Kurtarma',resume.value)
+   apply(await api.status())
+ })
+}
 const selectedTarget=computed(()=>disks.value.find(d=>d.number===target.value))
 const layoutMode=computed(()=>{
  if(!disk.value||!selectedTarget.value)return undefined
@@ -49,21 +91,38 @@ function reverseDirection(){
 const planChecked=ref(false)
 async function plan(){
  const source=disks.value.find(d=>d.number===selected.value)
- const destination=disks.value.find(d=>d.number===target.value)
+ const destination=selectedTarget.value
+ const version=selectionRevision
  if(!source||!destination)return
  reasons.value=[]
  planChecked.value=false
  await act(async()=>{
    const blockers=await api.plan(source,destination)
-   if(page.value==='Klon planı'&&source.number===selected.value&&destination.number===target.value){
+   if(version===selectionRevision){
      reasons.value=blockers
      planChecked.value=true
    }
  })
 }
-function inspectDisk(d:Disk){selected.value=d.number;mode.value='disk';page.value='Dosya sistemi';void start()}
-watch([page,selected,target,path,sector,mode],()=>{error.value='';layout.value=null;reasons.value=[];planChecked.value=false},{flush:'sync'})
-onMounted(async()=>{try{unlisten=await listen<Status>('operation',e=>apply(e.payload));apply(await api.status());timer=setInterval(()=>{if(status.value?.running)void api.status().then(apply).catch(e=>{error.value=String(e)})},1500)}catch(e){error.value=String(e)}await refresh()})
+function inspectDisk(d:Disk){if(busy.value)return;selected.value=d.number;mode.value='disk';page.value='Dosya sistemi';void start()}
+watch([page,selected,target,path,sector,mode,disks],()=>{
+ selectionRevision++
+ error.value=''
+ layout.value=null
+ reasons.value=[]
+ planChecked.value=false
+},{flush:'sync'})
+async function pollStatus(){
+ if(pendingStatus)return
+ pendingStatus=true
+ try{apply(await api.status())}catch(e){error.value=String(e)}finally{pendingStatus=false}
+}
+onMounted(()=>{
+ timer=setInterval(()=>{void pollStatus()},1500)
+ void listen<Status>('operation',e=>apply(e.payload)).then(remove=>{unlisten=remove}).catch(e=>log(String(e)))
+ void pollStatus()
+ void refresh()
+})
 onUnmounted(()=>{unlisten?.();clearInterval(timer)})
 </script>
 <template>
@@ -76,7 +135,7 @@ onUnmounted(()=>{unlisten?.();clearInterval(timer)})
  <p v-if="inventoryError" class="notice">{{inventoryError}}</p>
  <section><h2>Disk envanteri</h2><p v-if="!disks.length&&!inventoryError">Depolama sağlayıcısı henüz disk bildirmedi.</p>
  <article v-for="d in disks" :key="d.number"><div><h3>{{d.model}} <small>Disk {{d.number}}</small></h3><p>{{fmt(d.bytes)}} · {{d.bus}} · {{d.health||'Sağlık bilinmiyor'}}</p>
- <p>Seri {{d.serial||'bilinmiyor'}} · Sektör {{d.logical}} / {{d.physical}} B · Salt okunur {{seen(d.readonly)}}</p><p>Sistem {{seen(d.system)}} · Önyükleme {{seen(d.boot)}} · Çevrimdışı {{seen(d.offline)}}</p></div><button :disabled="!d.id" @click="inspectDisk(d)">İncele</button></article>
+ <p>Seri {{d.serial||'bilinmiyor'}} · Sektör {{d.logical}} / {{d.physical}} B · Salt okunur {{seen(d.readonly)}}</p><p>Sistem {{seen(d.system)}} · Önyükleme {{seen(d.boot)}} · Çevrimdışı {{seen(d.offline)}}</p></div><button :disabled="busy||!d.id" @click="inspectDisk(d)">İncele</button></article>
  </section><div class="actions"><button class="primary" @click="page='Disk imajı'">RAW imaj al</button><button @click="page='Klon planı'">Klon planı oluştur</button></div></template>
  <section v-if="page==='Klon planı'"><h2>Fiziksel disk uyumluluğu</h2><p>HDD → SSD ve SSD → HDD için kaynak ve hedefi seçin. Bu ekran salt okunur klon planı oluşturur.</p>
  <label>Kaynak disk<select v-model="selected"><option :value="null">Disk seçin</option><option v-for="d in disks" :key="d.number" :value="d.number">{{d.number}} · {{d.model}} · {{d.serial}} · {{fmt(d.bytes)}}</option></select></label>

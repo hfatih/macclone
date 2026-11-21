@@ -4,7 +4,7 @@ use std::os::windows::{ffi::OsStrExt, io::FromRawHandle};
 use windows_sys::Win32::{
     Foundation::HANDLE,
     Storage::{
-        FileSystem::{BusTypeFileBackedVirtual, FILE_FLAG_WRITE_THROUGH},
+        FileSystem::{BusTypeFileBackedVirtual, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH},
         Vhd::{
             ATTACH_VIRTUAL_DISK_FLAG_NO_DRIVE_LETTER, ATTACH_VIRTUAL_DISK_PARAMETERS,
             ATTACH_VIRTUAL_DISK_VERSION_1, AttachVirtualDisk, CREATE_VIRTUAL_DISK_PARAMETERS,
@@ -107,10 +107,12 @@ impl TestDisk {
     fn open_raw(&self, writable: bool) -> io::Result<File> {
         let path = self.attached_path()?;
         let mut options = OpenOptions::new();
-        options.read(true).write(writable).share_mode(0);
-        if writable {
-            options.custom_flags(FILE_FLAG_WRITE_THROUGH);
-        }
+        let flags = FILE_FLAG_NO_BUFFERING | if writable { FILE_FLAG_WRITE_THROUGH } else { 0 };
+        options
+            .read(true)
+            .write(writable)
+            .share_mode(0)
+            .custom_flags(flags);
         let file = options.open(&path)?;
         let descriptor = property(&file, StorageDeviceProperty)?;
         let bus = descriptor

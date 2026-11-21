@@ -93,25 +93,37 @@ pub fn local_path(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Read-only regular-file handle. Symlinks may be used for inputs, including on Unix.
+pub fn open_image_file(path: &Path) -> io::Result<File> {
+    local_path(path)?;
+    if !fs::metadata(path)?.is_file() {
+        return Err(invalid("Source must be a regular image file"));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A concurrent replacement with a FIFO cannot block the open.
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(1);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(invalid("Opened source is not a regular image file"));
+    }
+    Ok(file)
+}
+
 pub fn open_source(input: &Input, consistent: bool) -> io::Result<Source> {
     match input {
         Input::Image { path, sector } => {
-            local_path(path)?;
-            if !fs::metadata(path)?.is_file() {
-                return Err(invalid("Source must be a regular image file"));
-            }
-            let mut options = OpenOptions::new();
-            options.read(true);
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::OpenOptionsExt;
-                options.share_mode(1);
-            }
-            let f = options.open(path)?;
+            let f = open_image_file(path)?;
             let m = f.metadata()?;
-            if !m.is_file() {
-                return Err(invalid("Opened source is not a regular file"));
-            }
             geometry(m.len(), *sector)?;
             let stamp = Stamp {
                 identity: format!("{}#{}", fs::canonicalize(path)?.display(), file_id(&f)?.0),

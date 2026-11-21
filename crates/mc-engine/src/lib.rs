@@ -29,7 +29,10 @@ impl Default for Options {
 }
 impl Options {
     pub fn validate(self, sector: u32) -> io::Result<()> {
-        if self.block < sector || self.block > 8 * 1024 * 1024 || !self.block.is_multiple_of(sector)
+        if sector == 0
+            || self.block < sector
+            || self.block > 8 * 1024 * 1024
+            || !self.block.is_multiple_of(sector)
         {
             Err(invalid("Block must be a sector multiple, up to 8 MiB"))
         } else {
@@ -142,23 +145,63 @@ fn acquire<R: Read + Seek + ?Sized>(
     }
     Ok(missing)
 }
-fn regular(path: &Path, new: bool) -> io::Result<File> {
-    if !new && !fs::symlink_metadata(path)?.file_type().is_file() {
-        return Err(invalid("Expected a regular job file"));
-    }
+fn job_file(path: &Path, new: bool, write: bool) -> io::Result<File> {
     let mut opts = OpenOptions::new();
-    opts.read(true).write(true).create_new(new);
+    opts.read(true).write(write).create_new(new);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        opts.share_mode(1);
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        };
+        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(if write {
+                FILE_SHARE_READ
+            } else {
+                // Allow reading our own write handle while it remains open.
+                FILE_SHARE_READ | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE
+            });
     }
-    let f = opts.open(path)?;
-    if !f.metadata()?.is_file() || file_id(&f)?.1 != 1 {
+    let file = opts.open(path)?;
+    let metadata = file.metadata()?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(invalid("Job path is a reparse point"));
+        }
+    }
+    if !metadata.is_file() || file_id(&file)?.1 != 1 {
         return Err(invalid("Job file is not private to this directory"));
     }
-    Ok(f)
+    Ok(file)
 }
+
+fn load_report(path: &Path) -> io::Result<Option<Report>> {
+    let file = match job_file(path, false, false) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    bounded_json(&file).map(Some)
+}
+
+fn bounded_json<T: serde::de::DeserializeOwned>(file: &File) -> io::Result<T> {
+    const MAX_DOCUMENT: u64 = 1024 * 1024;
+    let mut bytes = Vec::new();
+    file.take(MAX_DOCUMENT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_DOCUMENT {
+        return Err(invalid("Job JSON exceeds size limit"));
+    }
+    serde_json::from_slice(&bytes).map_err(io::Error::other)
+}
+
 fn distinct(files: &[&File]) -> io::Result<()> {
     let ids = files
         .iter()
@@ -168,12 +211,6 @@ fn distinct(files: &[&File]) -> io::Result<()> {
         return Err(invalid("A source or job file aliases another endpoint"));
     }
     Ok(())
-}
-fn read_manifest(f: &mut File) -> io::Result<Manifest> {
-    if f.metadata()?.len() > 1024 * 1024 {
-        return Err(invalid("Manifest exceeds limit"));
-    }
-    serde_json::from_reader(f).map_err(io::Error::other)
 }
 fn sync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
@@ -265,7 +302,7 @@ fn write_image(
     }
     let path = dir.join("image.raw");
     let mut target = ImageTarget {
-        file: regular(&path, !resume)?,
+        file: job_file(&path, !resume, true)?,
         path,
     };
     let job = Journal::open(dir, resume)?;
@@ -286,9 +323,9 @@ struct Journal<'a> {
 
 impl<'a> Journal<'a> {
     fn open(dir: &'a Path, resume: bool) -> io::Result<Self> {
-        let manifest = regular(&dir.join("job.json"), !resume)?;
+        let manifest = job_file(&dir.join("job.json"), !resume, true)?;
         manifest.try_lock().map_err(io::Error::other)?;
-        let map = regular(&dir.join("map.jsonl"), !resume)?;
+        let map = job_file(&dir.join("map.jsonl"), !resume, true)?;
         distinct(&[&manifest, &map])?;
         Ok(Self {
             dir,
@@ -356,7 +393,7 @@ impl Target for ImageTarget {
         metadata.modified()
     }
     fn check_snapshot(&self, total: u64, modified: Self::Snapshot) -> io::Result<()> {
-        let named = File::open(&self.path)?;
+        let named = job_file(&self.path, false, false)?;
         let metadata = named.metadata()?;
         if file_id(&named)? != (self.identity()?, 1)
             || metadata.len() != total
@@ -397,6 +434,8 @@ fn transfer<T: Target>(
         mut manifest,
         mut map,
     } = job;
+    let report_path = dir.join("report.json");
+    let previous_report = load_report(&report_path)?;
     let TransferSource {
         original: mut source,
         gpt,
@@ -412,7 +451,7 @@ fn transfer<T: Target>(
         relocated_gpt_target_bytes: relocated_bytes,
     };
     if resume {
-        if read_manifest(&mut manifest)? != actual {
+        if bounded_json::<Manifest>(&manifest)? != actual {
             return Err(invalid("Job identity, geometry or options changed"));
         }
     } else {
@@ -507,6 +546,11 @@ fn transfer<T: Target>(
         });
     }
     drop(reader);
+    if previous_report.is_some() && (!resume || offset != total) {
+        return Err(invalid(
+            "Existing report conflicts with an incomplete job journal",
+        ));
+    }
     map.set_len(valid_end)?;
     map.seek(SeekFrom::Start(valid_end))?;
     target.seek(SeekFrom::Start(offset))?;
@@ -562,24 +606,20 @@ fn transfer<T: Target>(
         destination_identity: T::REPORT_DEVICE_IDENTITY.then_some(actual.target_id),
         gpt_relocated_from_bytes: relocated_bytes.map(|_| source.stamp.bytes),
     };
-    // Publish only a complete report. A resume of a completed job checks the old report.
-    let path = dir.join("report.json");
-    if path.try_exists()? {
-        let f = File::open(path)?;
-        if f.metadata()?.len() > 1024 * 1024 || serde_json::from_reader::<_, Report>(f)? != report {
+    if let Some(previous) = previous_report {
+        if previous != report || load_report(&report_path)?.as_ref() != Some(&report) {
             return Err(invalid("Existing report differs from verified result"));
         }
     } else {
-        let tmp = dir.join("report.pending");
-        // A crash can leave an unpublished temp. Do not follow it or edit it.
-        if tmp.try_exists()? {
-            fs::remove_file(&tmp)?
-        }
-        let mut f = regular(&tmp, true)?;
-        serde_json::to_writer_pretty(&mut f, &report)?;
-        f.sync_all()?;
-        drop(f);
-        fs::rename(tmp, path)?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix("report-")
+            .tempfile_in(dir)?;
+        serde_json::to_writer_pretty(&mut temporary, &report)?;
+        temporary.as_file().sync_all()?;
+        checkpoint(cancel)?;
+        temporary
+            .persist_noclobber(&report_path)
+            .map_err(|error| error.error)?;
         sync_dir(dir)?;
     }
     Ok(report)
@@ -634,7 +674,12 @@ fn hash_reader<R: Read + Seek + ?Sized>(
 // A matching prefix digest alone cannot detect a renamed, replaced or growing file.
 fn check_source_file(input: &Input, source: &Source) -> io::Result<()> {
     if let (Input::Image { path, .. }, Some(opened)) = (input, &source.backing_file) {
-        let named = File::open(path)?;
+        let named = mc_device::open_image_file(path).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("Source file changed during the operation: {error}"),
+            )
+        })?;
         let metadata = opened.metadata()?;
         let modified = metadata
             .modified()?
@@ -655,18 +700,28 @@ pub fn verify(
     input: &Input,
     expected: &str,
     cancel: &AtomicBool,
-    progress: impl FnMut(u64),
+    mut progress: impl FnMut(u64),
+) -> io::Result<String> {
+    verify_with_total(input, expected, cancel, |bytes, _| progress(bytes))
+}
+
+pub fn verify_with_total(
+    input: &Input,
+    expected: &str,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(u64, u64),
 ) -> io::Result<String> {
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(invalid("Expected a SHA-256 hex digest"));
     }
     let mut src = open_source(input, true)?;
+    let total = src.stamp.bytes;
     let hash = hash_reader(
         &mut *src.reader,
-        src.stamp.bytes,
+        total,
         &mut vec![0; 1024 * 1024],
         cancel,
-        progress,
+        |bytes| progress(bytes, total),
     )?;
     check_source_file(input, &src)?;
     checkpoint(cancel)?;
@@ -736,6 +791,71 @@ mod tests {
         assert!(verify(&i, &"0".repeat(64), &c, |_| {}).is_err());
         assert_eq!(j.run(true, &c, |_| {}).unwrap(), r)
     }
+    #[test]
+    fn report_created_while_verifying_is_preserved() {
+        let j = TestJob::new();
+        let report = j.out.join("report.json");
+        let result = j.run(false, &AtomicBool::new(false), |progress| {
+            if progress.phase == "verify" && progress.bytes == progress.total {
+                fs::write(&report, b"external report").unwrap();
+            }
+        });
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(report).unwrap(), b"external report");
+    }
+
+    #[test]
+    fn completed_job_with_missing_checkpoints_refuses_to_resume() {
+        let j = TestJob::new();
+        let cancel = AtomicBool::new(false);
+        let original = j.run(false, &cancel, |_| {}).unwrap();
+        fs::write(j.out.join("map.jsonl"), b"").unwrap();
+        let image = j.out.join("image.raw");
+        let current = vec![0xa5; original.bytes as usize];
+        fs::write(&image, &current).unwrap();
+        let result = j.run(true, &cancel, |_| {});
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("incomplete job journal")
+        );
+        assert_eq!(fs::read(image).unwrap(), current);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_job_rejects_report_symlink_even_if_content_matches() {
+        let j = TestJob::new();
+        let cancel = AtomicBool::new(false);
+        j.run(false, &cancel, |_| {}).unwrap();
+        let report = j.out.join("report.json");
+        let renamed = j.out.join("external.json");
+        fs::rename(&report, &renamed).unwrap();
+        std::os::unix::fs::symlink(&renamed, &report).unwrap();
+        assert!(j.run(true, &cancel, |_| {}).is_err());
+        assert!(renamed.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_fifo_replacement_returns_error_without_blocking() {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let j = TestJob::new();
+        let Input::Image { path, .. } = &j.src else {
+            unreachable!()
+        };
+        let expected = digest(&fs::read(path).unwrap());
+        let failure = verify(&j.src, &expected, &AtomicBool::new(false), |_| {
+            fs::remove_file(path).unwrap();
+            let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+            // SAFETY: name refers to a test-owned pathname in a temporary directory.
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        })
+        .unwrap_err();
+        assert!(failure.to_string().contains("Source file changed"));
+    }
+
     #[test]
     fn existing_dir_untouched() {
         let j = TestJob::new();

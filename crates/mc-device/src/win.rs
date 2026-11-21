@@ -111,6 +111,7 @@ fn bind_handle(file: &File, d: &Disk, check_bus: bool) -> io::Result<()> {
     if alignment.len() < 28
         || u32::from_le_bytes(alignment[16..20].try_into().unwrap()) != d.logical
         || u32::from_le_bytes(alignment[20..24].try_into().unwrap()) != d.physical
+        || (check_bus && u32::from_le_bytes(alignment[24..28].try_into().unwrap()) != 0)
         || d.physical > 4096
         || !d.physical.is_power_of_two()
         || d.physical < d.logical
@@ -250,6 +251,18 @@ impl Read for SectorReader {
         let skip = (self.pos - base) as usize;
         let n = max.min(self.buf.0.len() - skip);
         let read_len = (n + skip).div_ceil(self.sector) * self.sector;
+        #[cfg(feature = "windows-physical-clone")]
+        if self.require_offline {
+            if self.file.read(&mut self.buf.0[..read_len])? != read_len {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Short aligned raw disk read",
+                ));
+            }
+        } else {
+            self.file.read_exact(&mut self.buf.0[..read_len])?;
+        }
+        #[cfg(not(feature = "windows-physical-clone"))]
         self.file.read_exact(&mut self.buf.0[..read_len])?;
         b[..n].copy_from_slice(&self.buf.0[skip..skip + n]);
         self.pos += n as u64;
@@ -294,12 +307,16 @@ fn raw_disk_attributes(file: &File, writable: bool) -> io::Result<()> {
 
 #[cfg(feature = "windows-physical-clone")]
 fn confirmed_raw_handle(disk: &Disk, writable: bool) -> io::Result<SectorReader> {
-    use windows_sys::Win32::Storage::FileSystem::{FILE_DEVICE_DISK, FILE_FLAG_WRITE_THROUGH};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_DEVICE_DISK, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH,
+    };
     let mut options = OpenOptions::new();
-    options.read(true).write(writable).share_mode(0);
-    if writable {
-        options.custom_flags(FILE_FLAG_WRITE_THROUGH);
-    }
+    let flags = FILE_FLAG_NO_BUFFERING | if writable { FILE_FLAG_WRITE_THROUGH } else { 0 };
+    options
+        .read(true)
+        .write(writable)
+        .share_mode(0)
+        .custom_flags(flags);
     let path = format!(r"\\.\PhysicalDrive{}", disk.number);
     let file = options.open(path)?;
     let number = query::<12>(&file, IOCTL_STORAGE_GET_DEVICE_NUMBER)?;

@@ -17,6 +17,7 @@ fn err(e: impl std::fmt::Display) -> String {
 #[derive(Clone, Serialize, Default)]
 struct Status {
     id: u64,
+    revision: u64,
     running: bool,
     progress: Progress,
     report: Option<Report>,
@@ -104,6 +105,7 @@ where
         let publish = Mutex::new(std::time::Instant::now());
         let progress = |p: Progress| {
             if let Ok(mut j) = state.lock() {
+                j.record.revision += 1;
                 j.record.progress = p;
                 if let Ok(mut clock) = publish.lock()
                     && clock.elapsed().as_millis() >= 150
@@ -115,6 +117,7 @@ where
         };
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&cancel, &progress)));
         if let Ok(mut j) = state.lock() {
+            j.record.revision += 1;
             j.record.running = false;
             match res {
                 Ok(Ok((r, msg))) => {
@@ -147,8 +150,7 @@ fn create_image(app: AppHandle, request: Request) -> Api<u64> {
 #[tauri::command]
 fn verify_image(app: AppHandle, input: Input, expected: String) -> Api<u64> {
     job(app, move |c, p| {
-        let total = open_source(&input, true).map_err(err)?.stamp.bytes;
-        let hash = mc_engine::verify(&input, &expected, c, |bytes| {
+        let hash = mc_engine::verify_with_total(&input, &expected, c, |bytes, total| {
             p(Progress {
                 phase: "verify".into(),
                 bytes,
