@@ -9,6 +9,7 @@
 | Rust statik kontrol | Varsayılan workspace ve Windows x64 masaüstü için Clippy, uyarıları hata sayarak geçti. |
 | Arayüz | Node 24, npm, ESLint, vue-tsc ve Vite üretim derlemesi geçti. Headless Chromium'da sentetik IPC ile gezinme, disk seçimi, GPT görüntüsü, dry-run planı, imaj isteği ve doğrulama girişleri sınandı. |
 | Windows derleme | GNU x86_64 Windows hedefine çapraz derleme ve bağlama geçti. CLI ve masaüstü PE32+ x86-64 çıktısı oluşturuldu. Masaüstünde üretim web varlıkları `tauri/custom-protocol` ile gömüldü. |
+| GitLab iş tanımı | .gitlab-ci.yml, GitLab’ın yayımladığı CI JSON şemasına göre doğrulandı. Temiz bir kaynak kopyasında Linux çekirdek/referans ve frontend işlerinin komutları yerel Linux ortamında çalıştırıldı. 29 test, iki bayt karşılaştırması, Clippy, lint ve üretim frontend derlemesi geçti. Uzak GitLab pipeline ve Windows paketleme işi bu aşamada çalıştırılmadı. |
 | Yerel Windows kabulü | Windows 10/11 yürütmesi, WebView2 etkileşimi, Windows NSIS yükleyicisi, gerçek USB/SATA aygıtı ve Mac açılışı bu Linux ortamında sınanmadı. CI tanımlı; uzaktan workflow tetiklenmedi. |
 
 Kurtarma fixture'ı bir sektörde deterministik medya hatası üretir. Normal mod durur, kurtarma modu tek sektörü eksik olarak haritalar. Hedef ve günlük yazma/flush hataları, checksum değişikliği, son satırda kesinti, yanlış kaynak, aynı işe eşzamanlı erişim, kaynak hard link'i ve mevcut hedef dizini testlerde kapsanır. Gerçek fiziksel diske yazılmadı.

@@ -1,0 +1,63 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+
+stages:
+  - test
+  - package
+
+core-and-reference:
+  stage: test
+  image: rust:1.94.1-bookworm
+  script:
+    - command -v python3 || (apt-get update && apt-get install -y --no-install-recommends python3)
+    - rustup component add rustfmt clippy
+    - cargo fmt --all -- --check
+    - cargo clippy --locked --all-targets -- -D warnings
+    - cargo test --locked
+    - cargo build --locked -p macclone --target-dir target
+    - git init -q reference/partition-manager
+    - git -C reference/partition-manager fetch -q --depth=1 https://github.com/inalto/partition-manager.git 1d6c43f69c198b5978c19e0d2b5722d28d138938
+    - git -C reference/partition-manager checkout -q --detach FETCH_HEAD
+    - test "$(git -C reference/partition-manager rev-parse HEAD)" = "1d6c43f69c198b5978c19e0d2b5722d28d138938"
+    - cargo build --locked --manifest-path reference/partition-manager/Cargo.toml -p pm-cli --target-dir reference/target
+    - python3 scripts/smoke.py target/debug/macclone --partition-manager reference/target/debug/pm
+
+frontend:
+  stage: test
+  image: node:24-bookworm
+  script:
+    - cd apps/desktop
+    - npm ci --no-audit --no-fund
+    - npm run lint
+    - npm run build
+
+# Use an ordinary x64 Windows PowerShell runner for build and regular-file tests.
+# Its tag is supplied by the project or group; attached physical disks are never test inputs.
+windows-package:
+  stage: package
+  variables:
+    CARGO_TARGET_DIR: '$CI_PROJECT_DIR/target'
+  tags:
+    - '$MACCLONE_WINDOWS_RUNNER_TAG'
+  rules:
+    - if: '$MACCLONE_WINDOWS_RUNNER_TAG'
+  script:
+    - rustc -Vv
+    - cargo test --locked
+    - cargo build --locked -p macclone --target-dir target
+    - python scripts/smoke.py target/debug/macclone.exe
+    - cd apps/desktop
+    - npm ci --no-audit --no-fund
+    - npm run build
+    - cargo clippy --locked -p macclone-desktop -- -D warnings
+    - npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+    - if (-not (Get-ChildItem "../../target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue)) { throw "NSIS installer missing" }
+  artifacts:
+    name: 'MacClone-windows-x64-$CI_COMMIT_SHORT_SHA'
+    paths:
+      - target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+    expire_in: 14 days

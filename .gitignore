@@ -5,3 +5,5 @@ apps/desktop/src-tauri/gen/
 *.raw
 *.img
 *.partial
+__pycache__/
+/reference/

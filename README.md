@@ -4,6 +4,8 @@ Windows 10/11 x64 için Rust, Tauri 2 ve Vue 3 tabanlı disk inceleme, RAW imaj 
 
 Tam disk kopyasında teknik referansımız MIT lisanslı `inalto/partition-manager` v0.4.1’dir. İki motorun çıktısı, aralarında veri bulunan GPT bölümleriyle otomatik olarak karşılaştırılır. Seçilen komut ve commit `docs/ARCHITECTURE.md`, tekrarlanabilir deney `docs/VALIDATION.md` içindedir.
 
+GitLab geliştirme sırası ve 6.2 Sol için ilk görev [GitLab planında](docs/GITLAB-PLAN.md) yer alır.
+
 ## Bugün çalışan akışlar
 
 | İş | Davranış |
