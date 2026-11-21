@@ -4,7 +4,7 @@
   <p>Windows için macOS disk klonlama, RAW imaj ve doğrulama aracı.</p>
   <p><strong>Starlit Studios tarafından geliştirilmiştir.</strong></p>
   <p>
-    <a href="https://github.com/hfatih/macclone/releases/latest"><strong>Windows x64 İndir (v0.1.0)</strong></a> ·
+    <a href="https://github.com/hfatih/macclone/releases/latest"><strong>Windows x64 İndir (v0.1.1)</strong></a> ·
     <a href="#ekran-görüntüleri">Ekran görüntüleri</a> ·
     <a href="#klonlama-uyumluluğu">Uyumluluk</a> ·
     <a href="#windowsta-derleme-ve-başlatma">Derleme</a> ·
@@ -19,7 +19,7 @@ MacClone, HDD ve SSD arasında her iki yönde çalışacak şekilde tasarlandı.
 
 Hazır Windows kurulum dosyasını ve tek dosya CLI aracını [Son Sürüm (Releases)](https://github.com/hfatih/macclone/releases/latest) sayfasından indirebilirsiniz:
 
-- **`MacClone_0.1.0_x64-setup.exe`** — Windows 10/11 x64 masaüstü kurulum yükleyicisi (NSIS)
+- **`MacClone_0.1.1_x64-setup.exe`** — Windows 10/11 x64 masaüstü kurulum yükleyicisi (NSIS)
 - **`macclone.exe`** — Taşınabilir Windows x64 CLI aracı
 - **`SHA256SUMS.txt`** — Dosya bütünlüğü doğrulama özetleri
 

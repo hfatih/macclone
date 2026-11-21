@@ -37,7 +37,9 @@ impl GptRelocation {
         let mut mbr = vec![0; s as usize];
         at(reader, 0, &mut mbr)?;
         let protective: Vec<_> = mbr[446..510]
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(_, e)| e.iter().any(|byte| *byte != 0))
             .collect();
@@ -47,8 +49,8 @@ impl GptRelocation {
         if mbr[510..512] != [0x55, 0xaa]
             || entry[0] != 0
             || entry[4] != 0xee
-            || u32le(entry, 8) != 1
-            || u32le(entry, 12) != (original - 1).min(u64::from(u32::MAX)) as u32
+            || u32le(*entry, 8) != 1
+            || u32le(*entry, 12) != (original - 1).min(u64::from(u32::MAX)) as u32
         {
             return Err(bad(
                 "Protective MBR does not describe the entire source disk",

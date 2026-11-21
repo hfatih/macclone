@@ -160,7 +160,7 @@ pub fn inspect<R: Read + Seek>(r: &mut R, bytes: u64, sector: u32) -> io::Result
     let primary_signature = tag_read.is_ok() && &tag == b"EFI PART";
     let protective = mbr_read.is_ok()
         && m[510..] == [0x55, 0xaa]
-        && m[446..510].chunks_exact(16).any(|e| e[4] == 0xee);
+        && m[446..510].as_chunks::<16>().0.iter().any(|e| e[4] == 0xee);
     let backup_hint = if total > 1 && !primary_signature && !protective {
         // A valid backup can identify GPT even after losing both records at the front.
         gpt(r, total - 1, total, s).ok()
@@ -231,8 +231,10 @@ pub fn inspect<R: Read + Seek>(r: &mut R, bytes: u64, sector: u32) -> io::Result
                 id
             };
             let name: Vec<_> = e[56..128]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
                 .take_while(|v| *v != 0)
                 .collect();
             o.partitions.push(Partition {
@@ -247,9 +249,10 @@ pub fn inspect<R: Read + Seek>(r: &mut R, bytes: u64, sector: u32) -> io::Result
         o.table = "APM signature".into();
         o.warnings
             .push("Apple Partition Map entries have not been decoded".into())
-    } else if m[510..] == [0x55, 0xaa] && m[446..510].chunks_exact(16).any(|e| e[4] != 0) {
+    } else if m[510..] == [0x55, 0xaa] && m[446..510].as_chunks::<16>().0.iter().any(|e| e[4] != 0)
+    {
         o.table = "MBR".into();
-        for e in m[446..510].chunks_exact(16).filter(|e| e[4] != 0) {
+        for e in m[446..510].as_chunks::<16>().0.iter().filter(|e| e[4] != 0) {
             let start = u64::from(u32le(e, 8));
             let n = u64::from(u32le(e, 12));
             if start == 0 || n == 0 || start + n > total {

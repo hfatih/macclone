@@ -104,13 +104,16 @@ fn volumes() -> io::Result<Vec<String>> {
     }
 }
 
-pub(in crate::topology) fn disk_extents(volume: &str) -> io::Result<Vec<extents::Extent>> {
+pub(in crate::topology) fn disk_extents(
+    volume: &str,
+    allow_empty: bool,
+) -> io::Result<Vec<extents::Extent>> {
     // CreateFile requires the GUID without its final separator for a volume handle.
     let file = OpenOptions::new()
         .access_mode(0)
         .share_mode(SHARE_ALL)
         .open(volume.trim_end_matches('\\'))?;
-    extents::read(|buffer| {
+    extents::read_with(allow_empty, |buffer| {
         let mut returned = 0;
         // SAFETY: the file is live and the synchronous call only uses the writable output and count.
         let ok = unsafe {
@@ -304,7 +307,14 @@ pub(super) fn observe(disks: &[Disk]) -> Topology {
                 if extents::is_non_disk_volume(typ) {
                     continue;
                 }
-                match disk_extents(&volume) {
+                let removable = extents::is_removable_volume(typ);
+                match disk_extents(&volume, removable) {
+                    Ok(extents) if extents.is_empty() && removable => continue,
+                    Err(ref error)
+                        if removable && matches!(error.raw_os_error(), Some(21 | 1112)) =>
+                    {
+                        continue;
+                    }
                     Ok(extents)
                         if extents.iter().all(|e| {
                             disks
@@ -378,7 +388,7 @@ pub(super) fn observe(disks: &[Disk]) -> Topology {
 
 #[cfg(feature = "windows-physical-clone")]
 pub(in crate::topology) fn journal_disks(file: &fs::File) -> io::Result<Vec<u32>> {
-    Ok(disk_extents(&volume_for_handle(file)?)?
+    Ok(disk_extents(&volume_for_handle(file)?, false)?
         .into_iter()
         .map(|extent| extent.disk)
         .collect())

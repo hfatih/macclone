@@ -1878,7 +1878,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "macclone"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mc-device",
  "mc-engine",
@@ -1891,7 +1891,7 @@ dependencies = [
 
 [[package]]
 name = "macclone-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mc-device",
  "mc-engine",
@@ -1925,7 +1925,7 @@ dependencies = [
 
 [[package]]
 name = "mc-device"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "mc-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "mc-device",
@@ -1952,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "mc-inspect"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crc32fast",
  "serde",

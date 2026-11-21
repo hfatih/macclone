@@ -10,6 +10,11 @@ pub(super) const fn is_non_disk_volume(drive_type: u32) -> bool {
     matches!(drive_type, 4 | 5)
 }
 
+// WinBase GetDriveType value for DRIVE_REMOVABLE (e.g. SD/MMC card readers).
+pub(super) const fn is_removable_volume(drive_type: u32) -> bool {
+    drive_type == 2
+}
+
 const MAX_BYTES: usize = HEADER + ENTRY * MAX_COUNT;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -26,9 +31,12 @@ fn malformed() -> io::Error {
     )
 }
 
-fn parse(bytes: &[u8]) -> io::Result<Vec<Extent>> {
+fn parse_with(bytes: &[u8], allow_empty: bool) -> io::Result<Vec<Extent>> {
     let count =
         u32::from_le_bytes(bytes.get(..4).ok_or_else(malformed)?.try_into().unwrap()) as usize;
+    if count == 0 && allow_empty && bytes.len() >= HEADER {
+        return Ok(Vec::new());
+    }
     if !(1..=MAX_COUNT).contains(&count) {
         return Err(malformed());
     }
@@ -36,7 +44,9 @@ fn parse(bytes: &[u8]) -> io::Result<Vec<Extent>> {
         .get(HEADER..HEADER + count * ENTRY)
         .ok_or_else(malformed)?;
     entries
-        .chunks_exact(ENTRY)
+        .as_chunks::<ENTRY>()
+        .0
+        .iter()
         .map(|entry| {
             let disk = u32::from_le_bytes(entry[..4].try_into().unwrap());
             let start = i64::from_le_bytes(entry[8..16].try_into().unwrap());
@@ -53,19 +63,25 @@ fn parse(bytes: &[u8]) -> io::Result<Vec<Extent>> {
         .collect()
 }
 
+#[cfg(test)]
+fn parse(bytes: &[u8]) -> io::Result<Vec<Extent>> {
+    parse_with(bytes, false)
+}
+
 pub(super) enum Response {
     Complete(usize),
     NeedSpace,
 }
 
-pub(super) fn read(
+pub(super) fn read_with(
+    allow_empty: bool,
     mut query: impl FnMut(&mut [u8]) -> io::Result<Response>,
 ) -> io::Result<Vec<Extent>> {
     let mut buffer = vec![0; HEADER + ENTRY];
     loop {
         match query(&mut buffer)? {
             Response::Complete(returned) => {
-                return parse(buffer.get(..returned).ok_or_else(malformed)?);
+                return parse_with(buffer.get(..returned).ok_or_else(malformed)?, allow_empty);
             }
             Response::NeedSpace if buffer.len() < MAX_BYTES => {
                 buffer.resize((buffer.len() * 2).min(MAX_BYTES), 0);
@@ -78,6 +94,13 @@ pub(super) fn read(
             }
         }
     }
+}
+
+#[cfg(test)]
+pub(super) fn read(
+    query: impl FnMut(&mut [u8]) -> io::Result<Response>,
+) -> io::Result<Vec<Extent>> {
+    read_with(false, query)
 }
 
 #[cfg(test)]
@@ -148,5 +171,14 @@ mod tests {
         assert!(read(|_| Ok(Response::NeedSpace)).is_err());
         let error = read(|_| Err(io::ErrorKind::PermissionDenied.into())).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn accepts_empty_extents_for_removable_no_media_only() {
+        let empty = [0u8; HEADER];
+        assert!(parse_with(&empty, false).is_err());
+        assert_eq!(parse_with(&empty, true).unwrap(), Vec::new());
+        assert!(is_removable_volume(2));
+        assert!(!is_removable_volume(3));
     }
 }
