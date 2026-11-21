@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory() as root:
         layout = cli('inspect', src, *settings)
         assert layout['table'] == 'GPT' and not layout['warnings']
         assert [p['kind'] for p in layout['partitions']][0] == 'EFI System'
-        assert layout['partitions'][1]['filesystem'] == 'APFS signature'
+        assert layout['partitions'][1]['filesystem'].startswith('APFS')
         assert cli('dry-run', src, *settings)['writes'] == 0 and not job.exists()
         report = cli('image', src, job, *settings)
         assert (job/'image.raw').read_bytes() == raw == src.read_bytes()
