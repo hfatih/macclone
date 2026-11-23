@@ -35,7 +35,7 @@
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6?style=flat-square" alt="Windows 10/11 x64">
     <img src="https://img.shields.io/badge/Stack-Rust%20%C2%B7%20Tauri%20%C2%B7%20Vue-DEA584?style=flat-square" alt="Rust Tauri Vue">
     <a href="LICENSE">
-      <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License">
+      <img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square" alt="GPL-3.0-only">
     </a>
     <img src="https://hits.sh/github.com/hfatih/macclone.svg?style=flat-square&label=views&color=6366F1" alt="Views">
   </p>
@@ -243,7 +243,7 @@ python scripts/smoke.py target/debug/macclone.exe
 
 GitHub Actions runs Linux and Windows core tests, pinned `partition-manager` cross-checks, and Windows NSIS packaging. Please use synthetic fixture images when submitting contributions.
 
-[Contributing Guide](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Validation Scope](docs/VALIDATION.md) · [GitLab Plan](docs/GITLAB-PLAN.md) · [MIT License](LICENSE)
+[Contributing Guide](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Validation Scope](docs/VALIDATION.md) · [GitLab Plan](docs/GITLAB-PLAN.md) · [GNU GPL v3.0](LICENSE)
 
 ```text
 macclone/
@@ -261,3 +261,7 @@ macclone/
 ```
 
 > **Open Scope:** Full Windows acceptance for physical cloning, restoring RAW images to SSDs, privileged write helper, detailed SMART telemetry, APFS volume group/snapshot/Preboot &amp; Recovery analysis, FileVault unlocking, HFS+ catalog/journal inspection, and real-hardware Mac boot verification. See [`docs/VALIDATION.md`](docs/VALIDATION.md) for current verification coverage.
+
+## License
+
+Project-owned code and original material in this revision are licensed under [GNU GPL v3.0](LICENSE) (GPL-3.0-only). Third-party code, fonts, imagery, data, and brand assets retain their own terms and attributions. [Previous license and copyright notice](licenses/previous-license.txt).

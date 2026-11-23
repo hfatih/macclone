@@ -35,7 +35,7 @@
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6?style=flat-square" alt="Windows 10/11 x64">
     <img src="https://img.shields.io/badge/Teknoloji-Rust%20%C2%B7%20Tauri%20%C2%B7%20Vue-DEA584?style=flat-square" alt="Rust Tauri Vue">
     <a href="LICENSE">
-      <img src="https://img.shields.io/badge/Lisans-MIT-blue?style=flat-square" alt="MIT Lisansı">
+      <img src="https://img.shields.io/badge/Lisans-GPL--3.0-blue?style=flat-square" alt="GPL-3.0-only">
     </a>
     <img src="https://hits.sh/github.com/hfatih/macclone.svg?style=flat-square&label=views&color=6366F1" alt="Görüntülenme">
   </p>
@@ -229,3 +229,7 @@ Cargo.toml, Cargo.lock, LICENSE, CONTRIBUTING.md
 ```
 
 Açık kapsam: fiziksel klonun Windows kabulü, RAW imajı SSD'ye geri yükleme, ayrıcalıklı yazma yardımcısı, detaylı SMART, APFS volume group/snapshot/Preboot ve Recovery inceleme, FileVault açma, HFS+ katalog/journal incelemesi ve gerçek Mac üzerinde boot doğrulaması. Sağlanan mimari bu işleri ayırır. Güncel doğrulama kapsamı `docs/VALIDATION.md` içindedir.
+
+## Lisans
+
+Bu sürümde bize ait kod ve özgün içerik [GNU GPL v3.0](LICENSE) (GPL-3.0-only) altında yayımlanır. Üçüncü taraf kod, yazı tipleri, görseller, veriler ve marka öğeleri kendi lisans ve atıflarına tabidir. [Önceki lisans ve telif bildirimi](licenses/previous-license.txt).
